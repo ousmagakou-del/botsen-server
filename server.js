@@ -271,7 +271,7 @@ app.get('/bots', (req, res) => {
 // ============================================
 // DÉMARRAGE
 // ============================================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 BotSen démarré sur port ${PORT}`);
   console.log(`📡 Webhook: https://TON-APP.railway.app/webhook`);
