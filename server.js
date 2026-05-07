@@ -306,19 +306,24 @@ app.post('/chat', async (req, res) => {
       if (orderIdx > -1) intents.splice(orderIdx, 1);
     }
 
-    // Extrait le total si commande
+    // Extrait le total — supporte: "Total: 5 000 FCFA" "Total : 5000 FCFA." "5 000 FCFA"
     let orderTotal = 0;
-    const totalMatch = reply.match(/total\s*[:\-]?\s*([0-9][0-9\s]*)\s*f?cfa/i) ||
+    const totalMatch = reply.match(/total\s*[:\-]\s*([0-9][0-9\s]*)\s*f?cfa/i) ||
+                       reply.match(/total\s*[:\-]\s*([0-9\s]+)/i) ||
                        reply.match(/([0-9][0-9\s]{2,})\s*f?cfa/i);
-    if (totalMatch && (intents.includes('order')||intents.includes('payment'))) {
-      orderTotal = parseInt(totalMatch[1].replace(/\s/g,'')) || 0;
+    if (totalMatch) {
+      const extracted = parseInt(totalMatch[1].replace(/\s/g,''));
+      if (extracted > 0 && extracted < 10000000) orderTotal = extracted;
     }
 
     // Si total détecté ET adresse déjà donnée → boutons paiement
     if (orderTotal > 0) {
+      console.log(`💰 Total détecté: ${orderTotal} FCFA pour bot ${botId}`);
       intents.push('payment');
       // Crée la commande automatiquement et envoie email
-      autoCreateCommande(botId, sid, orderTotal, bot).catch(()=>{});
+      autoCreateCommande(botId, sid, orderTotal, bot).catch(e=>console.error('autoCommande err:',e));
+    } else {
+      console.log(`⚠️ Pas de total détecté dans: "${reply.substring(0,100)}"`);
     }
 
     // Si commande sans total encore → GPS pour adresse
