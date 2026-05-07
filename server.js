@@ -3834,33 +3834,37 @@ body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
   <div class="grid" id="grid"><div class="empty"><div class="empty-ico">⏳</div><div class="empty-txt">Chargement...</div></div></div>
 </div>
 <script>
-var token=localStorage.getItem('sb-token');
-var user=JSON.parse(localStorage.getItem('sb-user')||'{}');
-
-// Récupère token Google depuis URL (après OAuth callback)
+// Récupère token Google depuis URL (après OAuth callback) — AVANT tout
 var params=new URLSearchParams(window.location.search);
 if(params.get('token')){
-  token=params.get('token');
-  try{user=JSON.parse(decodeURIComponent(params.get('user')||'{}'));}catch(e){}
-  localStorage.setItem('sb-token',token);
-  localStorage.setItem('sb-user',JSON.stringify(user));
+  localStorage.setItem('sb-token', params.get('token'));
+  try{ localStorage.setItem('sb-user', JSON.stringify(JSON.parse(decodeURIComponent(params.get('user')||'{}')))); }catch(e){}
   window.history.replaceState({},'','/app');
 }
 
-if(!token){window.location.href='/login';}
+var token=localStorage.getItem('sb-token');
+var user=JSON.parse(localStorage.getItem('sb-user')||'{}');
+
+if(!token){ window.location.href='/login'; }
 document.getElementById('u-name').textContent=user.nom||user.email||'';
 
 async function loadBots(){
+  var grid=document.getElementById('grid');
   try{
     var r=await fetch('/auth/my-bots',{headers:{'Authorization':'Bearer '+token}});
     if(r.status===401){logout();return;}
     var bots=await r.json();
-    var grid=document.getElementById('grid');
+
+    if(!Array.isArray(bots)){
+      grid.innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur serveur</div><div class="empty-sub">'+JSON.stringify(bots)+'</div></div>';
+      return;
+    }
+
     document.getElementById('page-sub').innerHTML='<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
     var html='';
     if(bots.length){
       bots.forEach(function(b){
-        var logo=b.logo_url?'<img class="card-logo" src="'+b.logo_url+'" alt="'+b.nom+'"/>':'<div class="card-ava" style="background:'+b.couleur+'">'+b.emoji+'</div>';
+        var logo=b.logo_url?'<img class="card-logo" src="'+b.logo_url+'" alt="'+b.nom+'"/>':'<div class="card-ava" style="background:'+(b.couleur||'#00c875')+'">'+( b.emoji||'🤖')+'</div>';
         html+='<div class="card">'
           +'<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
           +'<div class="card-btns">'
@@ -3873,7 +3877,9 @@ async function loadBots(){
     }
     html+='<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
     grid.innerHTML=html;
-  }catch(e){document.getElementById('grid').innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur de chargement</div></div>';}
+  }catch(e){
+    grid.innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur: '+e.message+'</div></div>';
+  }
 }
 
 function logout(){localStorage.removeItem('sb-token');localStorage.removeItem('sb-user');window.location.href='/login';}
