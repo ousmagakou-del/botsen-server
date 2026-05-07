@@ -296,6 +296,16 @@ app.post('/chat', async (req, res) => {
 
     const reply = await callAI(bot.prompt, sid, message);
 
+    // Détecte si le BOT demande l'adresse dans sa réponse
+    // → affiche les boutons GPS
+    const replyLower = reply.toLowerCase();
+    if (/adresse|livraison|où.*habite|domicile|quartier|livrer|deliver/i.test(replyLower)) {
+      if (!intents.includes('geoloc')) intents.push('geoloc');
+      // Retire 'order' pour ne pas afficher GPS en double
+      const orderIdx = intents.indexOf('order');
+      if (orderIdx > -1) intents.splice(orderIdx, 1);
+    }
+
     // Extrait le total si commande
     let orderTotal = 0;
     const totalMatch = reply.match(/total\s*[:\-]?\s*([0-9][0-9\s]*)\s*f?cfa/i) ||
@@ -304,7 +314,13 @@ app.post('/chat', async (req, res) => {
       orderTotal = parseInt(totalMatch[1].replace(/\s/g,'')) || 0;
     }
 
+    // Si total détecté ET adresse déjà donnée → boutons paiement
     if (orderTotal > 0) intents.push('payment');
+
+    // Si commande sans total encore → GPS pour adresse
+    if (intents.includes('order') && orderTotal === 0) {
+      if (!intents.includes('geoloc')) intents.push('geoloc');
+    }
 
     const actions = buildActions(intents, bot, orderTotal, 'CMD-'+Date.now().toString(36).toUpperCase());
     const catalogue = (intents.includes('catalogue') && bot.catalogue?.length) ? bot.catalogue.slice(0,8) : null;
@@ -912,15 +928,15 @@ ${bot.services?`- Services: ${bot.services}`:''}
 ${bot.paiement?`- Paiement: ${bot.paiement}`:'- Paiement: Wave, Orange Money, espèces'}
 ${cat}
 
-RÈGLES:
-- Adresse → mentionne que le lien Maps apparaît ci-dessous
-- Téléphone → mentionne le bouton d'appel ci-dessous
-- Commande → récapitule AVEC le total exact en FCFA (ex: "Total: 3 000 FCFA")
-- RDV demandé → dis que tu montres les créneaux disponibles ci-dessous
-- Message vocal → réponds naturellement comme si c'était du texte
-- TOUJOURS utiliser des listes avec tirets pour les produits/services/menus (ex: "- Carte péage: 5 000 FCFA\n- Carte rapido: 10 000 FCFA")
-- Maximum 3 phrases de texte + la liste
-- Toujours proposer de l'aide supplémentaire`;
+RÈGLES STRICTES — suis cet ordre:
+1. Client commande → récapitule les articles + total FCFA + demande l'adresse de livraison
+2. Client donne adresse → confirme la commande avec l'adresse + montre les boutons de paiement
+3. Ne jamais confirmer une commande SANS avoir l'adresse de livraison d'abord
+4. Adresse demandée → mentionne que le bouton GPS apparaît ci-dessous
+5. Téléphone demandé → mentionne le bouton d'appel ci-dessous
+6. RDV demandé → mentionne que le calendrier apparaît ci-dessous
+7. TOUJOURS lister les produits/services avec tirets (ex: "- Carte péage: 5 000 FCFA")
+8. Répondre dans la même langue que le client (français ou wolof)`;
 }
 function makeBotId(nom) {
   return nom.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,'').trim().replace(/\s+/g,'-').substring(0,25)+'-'+Date.now().toString(36);
@@ -2406,8 +2422,10 @@ function renderCat(items){
   el.style.display='flex';el.innerHTML='';
   items.forEach(function(item){
     var c=document.createElement('div');c.className='cat-card';
-    var imgHtml=item.image?`<img src="${item.image}" style="width:100%;height:60px;object-fit:cover;border-radius:8px 8px 0 0;display:block;margin:-8px -6px 6px;width:calc(100% + 12px)" alt="${item.nom}"/>`:'<span class="cat-emoji">'+(item.emoji||'🛍️')+'</span>';
-    c.innerHTML=imgHtml+'<span class="cat-nom">'+item.nom+'</span>'+(item.desc?`<span style="font-size:10px;color:#9ab0a0;display:block;margin-top:1px">${item.desc}</span>`:'')+'<span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>';
+    var imgHtml=item.image?'<img src="'+item.image+'" style="width:100%;height:60px;object-fit:cover;border-radius:8px 8px 0 0;display:block;margin:-8px -6px 6px;width:calc(100% + 12px)" alt="'+item.nom+'"/>'
+      :'<span class="cat-emoji">'+(item.emoji||'🛍️')+'</span>';
+    var descHtml=item.desc?'<span style="font-size:10px;color:#9ab0a0;display:block;margin-top:1px">'+item.desc+'</span>':'';
+    c.innerHTML=imgHtml+'<span class="cat-nom">'+item.nom+'</span>'+descHtml+'<span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>';
     c.onclick=function(){send('Je veux commander '+item.nom);};
     el.appendChild(c);
   });
