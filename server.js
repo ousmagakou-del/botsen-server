@@ -20,7 +20,7 @@ const CONFIG = {
   SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY,
   META_VERIFY_TOKEN:    process.env.META_VERIFY_TOKEN || 'samabot_verify_2025',
   META_ACCESS_TOKEN:    process.env.META_ACCESS_TOKEN,
-  BASE_URL:             process.env.BASE_URL || 'https://botsen-server-production.up.railway.app',
+  BASE_URL:             process.env.BASE_URL || 'https://api.samabot.app',
 };
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
