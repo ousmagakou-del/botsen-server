@@ -885,13 +885,17 @@ function getEmoji(n) {
 }
 function getQR(n) {
   return {
-    restaurant:['🍛 Voir le menu','📦 Commander','🛵 Livraison','📍 Adresse','🕐 Horaires'],
-    salon:['📅 Prendre RDV','💅 Services','💰 Tarifs','📍 Adresse','📞 Nous appeler'],
-    clinique:['🚨 Urgence','📅 RDV médecin','👨‍⚕️ Médecins','💰 Tarifs','📍 Adresse'],
-    boutique:['✨ Nouveautés','🔥 Promotions','📦 Commander','🚚 Livraison','📍 Adresse'],
-    'auto-ecole':['📝 S\'inscrire','💰 Tarifs','📅 Calendrier','📍 Adresse'],
-    pharmacie:['💊 Médicament','🕐 Horaires','📍 Adresse','📞 Urgence'],
-  }[n]||['💬 Aide','ℹ️ Infos','📍 Adresse','📞 Contact'];
+    restaurant:  ['🍛 Voir le menu','📦 Commander','🛵 Livraison','📍 Adresse','🕐 Horaires'],
+    traiteur:    ['🍲 Notre menu','📦 Commander','🚚 Livraison','📍 Adresse','🕐 Horaires'],
+    boulangerie: ['🥖 Nos produits','📦 Commander','📍 Adresse','🕐 Horaires'],
+    salon:       ['📅 Prendre RDV','💅 Nos services','💰 Tarifs','📍 Adresse','📞 Nous appeler'],
+    clinique:    ['🚨 Urgence','📅 RDV médecin','👨‍⚕️ Nos médecins','💰 Tarifs','📍 Adresse'],
+    pharmacie:   ['💊 Médicaments','🕐 Horaires','📍 Adresse','📞 Urgence'],
+    boutique:    ['✨ Nouveautés','🔥 Promotions','📦 Commander','🚚 Livraison','📍 Adresse'],
+    'auto-ecole':['📝 S\'inscrire','💰 Tarifs','📅 Calendrier','📍 Adresse','📞 Contact'],
+    immobilier:  ['🏠 Nos biens','📅 Visite','💰 Prix','📍 Localisation','📞 Contact'],
+    autre:       ['💬 Nos services','💰 Tarifs','📅 RDV','📍 Adresse','📞 Contact'],
+  }[n] || ['💬 Nos services','💰 Tarifs','📍 Adresse','📞 Contact'];
 }
 function makePrompt(bot) {
   const cat = bot.catalogue?.length ? `\nCATALOGUE:\n${bot.catalogue.map(p=>`- ${p.nom}: ${p.prix} FCFA${p.desc?' ('+p.desc+')':''}`).join('\n')}` : '';
@@ -914,6 +918,8 @@ RÈGLES:
 - Commande → récapitule AVEC le total exact en FCFA (ex: "Total: 3 000 FCFA")
 - RDV demandé → dis que tu montres les créneaux disponibles ci-dessous
 - Message vocal → réponds naturellement comme si c'était du texte
+- TOUJOURS utiliser des listes avec tirets pour les produits/services/menus (ex: "- Carte péage: 5 000 FCFA\n- Carte rapido: 10 000 FCFA")
+- Maximum 3 phrases de texte + la liste
 - Toujours proposer de l'aide supplémentaire`;
 }
 function makeBotId(nom) {
@@ -1395,8 +1401,14 @@ textarea{min-height:80px;resize:vertical}
 .pay-opts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .pay-opt{padding:6px 14px;border-radius:20px;border:1.5px solid #d1e5d8;font-size:13px;font-weight:600;cursor:pointer;color:#5a7060;transition:all .15s}
 .pay-opt.s{background:#00c875;color:#fff;border-color:#00c875}
-.cat-items{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.cat-item{display:grid;grid-template-columns:1fr 80px 80px auto;gap:6px;align-items:center}
+.cat-items{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.cat-item{background:#f9faf9;border:1px solid #e5e7eb;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.cat-item-row{display:grid;grid-template-columns:1fr 90px auto;gap:6px;align-items:center}
+.cat-item-img{display:flex;align-items:center;gap:8px}
+.cat-img-preview{width:40px;height:40px;border-radius:8px;object-fit:cover;display:none;border:1px solid #d1e5d8}
+.cat-img-preview.show{display:block}
+.cat-img-btn{padding:5px 10px;background:#f0f4f1;border:1.5px dashed #d1e5d8;border-radius:8px;font-size:11px;font-weight:600;color:#5a7060;cursor:pointer;position:relative;overflow:hidden;white-space:nowrap}
+.cat-img-btn input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
 .cat-item input{padding:8px 10px;font-size:13px}
 .rm{background:#fee2e2;border:none;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:13px;color:#dc2626}
 .add-cat{border:1.5px dashed rgba(0,200,117,.4);border-radius:10px;padding:9px;text-align:center;cursor:pointer;font-size:13px;font-weight:600;color:#00a862;background:rgba(0,200,117,.06);margin-top:6px}
@@ -1475,10 +1487,20 @@ textarea{min-height:80px;resize:vertical}
       <div style="font-size:11px;color:#9ab0a0;margin-bottom:6px">Nom • Prix • Description (optionnel)</div>
       <div class="cat-items" id="cat-items">
         <div class="cat-item">
-          <input placeholder="Nom de l'article" class="cat-nom"/>
-          <input placeholder="Prix F" class="cat-prix" type="number" min="0"/>
-          <input placeholder="Desc." class="cat-desc"/>
-          <button class="rm" onclick="this.closest('.cat-item').remove()">✕</button>
+          <div class="cat-item-row">
+            <input placeholder="Nom de l'article *" class="cat-nom"/>
+            <input placeholder="Prix F" class="cat-prix" type="number" min="0"/>
+            <button class="rm" onclick="this.closest('.cat-item').remove()">✕</button>
+          </div>
+          <input placeholder="Description (optionnel)" class="cat-desc" style="font-size:13px"/>
+          <div class="cat-item-img">
+            <img class="cat-img-preview" alt=""/>
+            <div class="cat-img-btn">
+              📷 Photo
+              <input type="file" accept="image/*" onchange="uploadCatImg(this)"/>
+            </div>
+            <span style="font-size:11px;color:#9ab0a0;margin-left:4px">Optionnel</span>
+          </div>
         </div>
       </div>
       <div class="add-cat" onclick="addItem()">+ Ajouter un article</div>
@@ -1551,8 +1573,30 @@ function tPay(e){e.classList.toggle('s');payOpts=Array.from(document.querySelect
 
 function addItem(){
   var d=document.createElement('div');d.className='cat-item';
-  d.innerHTML='<input placeholder="Nom" class="cat-nom"/><input placeholder="Prix F" class="cat-prix" type="number" min="0"/><input placeholder="Desc." class="cat-desc"/><button class="rm" onclick="this.closest(\\'.cat-item\\').remove()">✕</button>';
+  d.innerHTML='<div class="cat-item-row"><input placeholder="Nom de l\'article *" class="cat-nom"/><input placeholder="Prix F" class="cat-prix" type="number" min="0"/><button class="rm" onclick="this.closest(\\'.cat-item\\').remove()">✕</button></div><input placeholder="Description (optionnel)" class="cat-desc" style="font-size:13px"/><div class="cat-item-img"><img class="cat-img-preview" alt=""/><div class="cat-img-btn">📷 Photo<input type="file" accept="image/*" onchange="uploadCatImg(this)"/></div><span style="font-size:11px;color:#9ab0a0;margin-left:4px">Optionnel</span></div>';
   document.getElementById('cat-items').appendChild(d);
+}
+
+async function uploadCatImg(input){
+  var file=input.files[0];if(!file)return;
+  var item=input.closest('.cat-item');
+  var preview=item.querySelector('.cat-img-preview');
+  var btn=item.querySelector('.cat-img-btn');
+  btn.style.opacity='.5';
+  var reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      var r=await fetch('/upload/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base64:e.target.result,fileName:file.name,mimeType:file.type,folder:'catalogue'})});
+      var d=await r.json();
+      if(d.url){
+        preview.src=d.url;preview.classList.add('show');
+        input.dataset.url=d.url;
+        btn.innerHTML='✅ Photo<input type="file" accept="image/*" onchange="uploadCatImg(this)"/>';
+      }
+    }catch(e){alert('Erreur upload image');}
+    btn.style.opacity='1';
+  };
+  reader.readAsDataURL(file);
 }
 
 function getCat(){
@@ -1560,7 +1604,9 @@ function getCat(){
     var n=i.querySelector('.cat-nom')?.value?.trim();
     var p=i.querySelector('.cat-prix')?.value;
     var d=i.querySelector('.cat-desc')?.value?.trim();
-    return n&&p?{nom:n,prix:parseInt(p),desc:d||'',emoji:'🛍️'}:null;
+    var imgInput=i.querySelector('input[type=file]');
+    var img=imgInput?.dataset?.url||null;
+    return n&&p?{nom:n,prix:parseInt(p),desc:d||'',image:img,emoji:'🛍️'}:null;
   }).filter(Boolean);
 }
 
@@ -2360,7 +2406,8 @@ function renderCat(items){
   el.style.display='flex';el.innerHTML='';
   items.forEach(function(item){
     var c=document.createElement('div');c.className='cat-card';
-    c.innerHTML='<span class="cat-emoji">'+(item.emoji||'🛍️')+'</span><span class="cat-nom">'+item.nom+'</span><span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>';
+    var imgHtml=item.image?`<img src="${item.image}" style="width:100%;height:60px;object-fit:cover;border-radius:8px 8px 0 0;display:block;margin:-8px -6px 6px;width:calc(100% + 12px)" alt="${item.nom}"/>`:'<span class="cat-emoji">'+(item.emoji||'🛍️')+'</span>';
+    c.innerHTML=imgHtml+'<span class="cat-nom">'+item.nom+'</span>'+(item.desc?`<span style="font-size:10px;color:#9ab0a0;display:block;margin-top:1px">${item.desc}</span>`:'')+'<span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>';
     c.onclick=function(){send('Je veux commander '+item.nom);};
     el.appendChild(c);
   });
