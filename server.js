@@ -315,7 +315,11 @@ app.post('/chat', async (req, res) => {
     }
 
     // Si total détecté ET adresse déjà donnée → boutons paiement
-    if (orderTotal > 0) intents.push('payment');
+    if (orderTotal > 0) {
+      intents.push('payment');
+      // Crée la commande automatiquement et envoie email
+      autoCreateCommande(botId, sid, orderTotal, bot).catch(()=>{});
+    }
 
     // Si commande sans total encore → GPS pour adresse
     if (intents.includes('order') && orderTotal === 0) {
@@ -867,6 +871,33 @@ async function notifyNouveauMessage(botId, message) {
       await sendWhatsApp(bot.notifications_phone, msg);
     }
   } catch(e) {}
+}
+
+// ============================================
+// AUTO COMMANDE — Créée automatiquement quand total détecté
+// ============================================
+async function autoCreateCommande(botId, sessionId, total, bot) {
+  try {
+    // Vérifie si une commande existe déjà pour cette session avec ce total
+    const existing = await db.select('commandes', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&total=eq.${total}&statut=eq.pending`);
+    if (existing?.length) return; // Déjà créée
+
+    const cmd = await db.insert('commandes', {
+      bot_id: botId,
+      session_id: sessionId,
+      items: [],
+      total: total,
+      statut: 'pending',
+      methode_paiement: 'en attente',
+    });
+
+    if (cmd?.[0]) {
+      console.log(`📦 Commande auto-créée: ${cmd[0].numero} — ${total} FCFA`);
+      await notifyPatron(botId, cmd[0]);
+    }
+  } catch(e) {
+    console.error('autoCreateCommande:', e.message);
+  }
 }
 
 // ============================================
