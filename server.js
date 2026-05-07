@@ -227,6 +227,7 @@ function detectIntent(msg, bot) {
   if (/partager|lien|link/.test(l)) intents.push('share');
   if (/horaire|heure|ouvert|fermé|quand/.test(l)) intents.push('hours');
   if (/commander|commande|prendre|acheter|vouloir|bëgg|veux/.test(l)) intents.push('order');
+  if (/rdv|rendez.vous|réserver|appointment|booking|créneau|disponible|samedi|dimanche|lundi|mardi|mercredi|jeudi|vendredi|demain|semaine/.test(l)) intents.push('rdv');
   if (/adresse|livraison|où.*habite|domicile|quartier|rue|position|gps|localisation/.test(l)) intents.push('geoloc');
   if (/confirme|confirmé|valider|c'est bon|ok pour|d'accord/.test(l)) intents.push('confirm_order');
   if (/payer|paiement|wave|orange|om\b|prix|total/.test(l)) intents.push('payment');
@@ -259,6 +260,10 @@ function buildActions(intents, bot, orderTotal=0, orderRef='') {
       actions.push({ type:'om', label:`🟠 Orange Money`, url:`tel:#144*${n}*${orderTotal}#` });
     }
     actions.push({ type:'cash', label:'💵 Payer à la livraison', url:null });
+  }
+  // RDV — affiche le calendrier
+  if (intents.includes('rdv')) {
+    actions.push({ type:'rdv', label:'📅 Voir les créneaux disponibles', url:null });
   }
   // Géolocalisation — affichée quand commande détectée ou adresse demandée
   if (intents.includes('order') || intents.includes('geoloc')) {
@@ -443,6 +448,190 @@ app.post('/avis', async (req, res) => {
 });
 
 // ============================================
+// RENDEZ-VOUS — API complète
+// ============================================
+
+// Créneaux disponibles pour une date
+app.get('/rdv/creneaux/:botId', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { date } = req.query; // format: YYYY-MM-DD
+
+    if (!date) return res.status(400).json({ error: 'date requis (YYYY-MM-DD)' });
+
+    // Récupère les disponibilités du jour
+    const dateObj = new Date(date);
+    const jourSemaine = dateObj.getDay(); // 0=dim, 1=lun...
+
+    const [dispos, rdvPris, jourFerme] = await Promise.all([
+      db.select('disponibilites', `?bot_id=eq.${botId}&jour_semaine=eq.${jourSemaine}&actif=eq.true`),
+      db.select('rendez_vous', `?bot_id=eq.${botId}&date=eq.${date}&statut=neq.annule`),
+      db.select('jours_fermes', `?bot_id=eq.${botId}&date=eq.${date}`)
+    ]);
+
+    if (jourFerme?.length) {
+      return res.json({ creneaux: [], ferme: true, message: jourFerme[0].raison || 'Fermé ce jour' });
+    }
+
+    if (!dispos?.length) {
+      return res.json({ creneaux: [], ferme: true, message: 'Pas de disponibilité ce jour' });
+    }
+
+    const dispo = dispos[0];
+    const heuresPrises = new Set(rdvPris?.map(r => r.heure) || []);
+
+    // Génère les créneaux
+    const creneaux = [];
+    let h = parseInt(dispo.heure_debut.split(':')[0]);
+    let m = parseInt(dispo.heure_debut.split(':')[1]);
+    const hFin = parseInt(dispo.heure_fin.split(':')[0]);
+    const mFin = parseInt(dispo.heure_fin.split(':')[1]);
+    const slot = dispo.duree_slot || 60;
+
+    while (h < hFin || (h === hFin && m < mFin)) {
+      const heureStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      creneaux.push({
+        heure: heureStr,
+        disponible: !heuresPrises.has(heureStr)
+      });
+      m += slot;
+      h += Math.floor(m / 60);
+      m = m % 60;
+    }
+
+    res.json({ creneaux, date, jourSemaine });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Créneaux des 7 prochains jours
+app.get('/rdv/semaine/:botId', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const jours = [];
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const jourSemaine = d.getDay();
+      const joursNoms = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+      const moisNoms = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
+
+      const [dispos, rdvPris, jourFerme] = await Promise.all([
+        db.select('disponibilites', `?bot_id=eq.${botId}&jour_semaine=eq.${jourSemaine}&actif=eq.true`),
+        db.select('rendez_vous', `?bot_id=eq.${botId}&date=eq.${dateStr}&statut=neq.annule`),
+        db.select('jours_fermes', `?bot_id=eq.${botId}&date=eq.${dateStr}`)
+      ]);
+
+      const ferme = !!jourFerme?.length || !dispos?.length;
+      const heuresPrises = new Set(rdvPris?.map(r => r.heure) || []);
+      let creneauxDispo = 0;
+
+      if (!ferme && dispos?.length) {
+        const dispo = dispos[0];
+        let h = parseInt(dispo.heure_debut.split(':')[0]);
+        let m = parseInt(dispo.heure_debut.split(':')[1]);
+        const hFin = parseInt(dispo.heure_fin.split(':')[0]);
+        const slot = dispo.duree_slot || 60;
+        while (h < hFin) {
+          const heureStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+          if (!heuresPrises.has(heureStr)) creneauxDispo++;
+          m += slot; h += Math.floor(m/60); m = m%60;
+        }
+      }
+
+      jours.push({
+        date: dateStr,
+        label: i === 0 ? "Aujourd'hui" : i === 1 ? 'Demain' : `${joursNoms[jourSemaine]} ${d.getDate()} ${moisNoms[d.getMonth()]}`,
+        ferme,
+        creneauxDispo
+      });
+    }
+
+    res.json({ jours });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Créer un RDV
+app.post('/rdv/create', async (req, res) => {
+  try {
+    const { botId, sessionId, clientNom, clientTel, service, date, heure, notes } = req.body;
+    if (!botId || !date || !heure) return res.status(400).json({ error: 'botId, date et heure requis' });
+
+    // Vérifie que le créneau est encore disponible
+    const existing = await db.select('rendez_vous', `?bot_id=eq.${botId}&date=eq.${date}&heure=eq.${heure}&statut=neq.annule`);
+    if (existing?.length) return res.status(409).json({ error: 'Ce créneau est déjà pris' });
+
+    const rdv = await db.insert('rendez_vous', {
+      bot_id: botId,
+      session_id: sessionId || null,
+      client_nom: clientNom || 'Client',
+      client_tel: clientTel || null,
+      service: service || 'RDV',
+      date, heure,
+      statut: 'confirme',
+      notes: notes || null
+    });
+
+    // Notifie le patron
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone`);
+    const bot = bots?.[0];
+    console.log(`📅 Nouveau RDV: ${clientNom} le ${date} à ${heure} chez ${bot?.nom}`);
+
+    res.json({ success: true, rdv: rdv?.[0] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Annuler un RDV
+app.patch('/rdv/:id/annuler', async (req, res) => {
+  try {
+    await db.update('rendez_vous', { statut: 'annule', updated_at: new Date().toISOString() }, `?id=eq.${req.params.id}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Changer statut RDV
+app.patch('/rdv/:id/statut', async (req, res) => {
+  try {
+    await db.update('rendez_vous', { statut: req.body.statut, updated_at: new Date().toISOString() }, `?id=eq.${req.params.id}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// RDV du jour
+app.get('/rdv/today/:botId', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const rdvs = await db.select('rendez_vous', `?bot_id=eq.${req.params.botId}&date=eq.${today}&statut=eq.confirme&order=heure.asc`);
+    res.json(rdvs || []);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Configurer les disponibilités
+app.post('/rdv/disponibilites/:botId', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { disponibilites } = req.body;
+
+    // Supprime les anciennes
+    await db.update('disponibilites', { actif: false }, `?bot_id=eq.${botId}`);
+
+    // Insère les nouvelles
+    for (const d of disponibilites) {
+      await db.insert('disponibilites', {
+        bot_id: botId,
+        jour_semaine: d.jour,
+        heure_debut: d.debut,
+        heure_fin: d.fin,
+        duree_slot: d.slot || 60,
+        actif: true
+      });
+    }
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================
 // NOTIFICATIONS
 // ============================================
 async function notifyPatron(botId, commande) {
@@ -509,6 +698,7 @@ RÈGLES:
 - Adresse → mentionne que le lien Maps apparaît ci-dessous
 - Téléphone → mentionne le bouton d'appel ci-dessous
 - Commande → récapitule AVEC le total exact en FCFA (ex: "Total: 3 000 FCFA")
+- RDV demandé → dis que tu montres les créneaux disponibles ci-dessous
 - Message vocal → réponds naturellement comme si c'était du texte
 - Toujours proposer de l'aide supplémentaire`;
 }
@@ -681,18 +871,62 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 
   <div class="stats">
     <div class="stat"><div class="stat-val">${msgsToday}</div><div class="stat-lbl">Msgs aujourd'hui</div></div>
+    <div class="stat"><div class="stat-val" id="rdv-today-count">—</div><div class="stat-lbl">RDV aujourd'hui</div><div class="stat-sub">📅 En cours</div></div>
     <div class="stat"><div class="stat-val">${commandes?.length||0}</div><div class="stat-lbl">Commandes</div><div class="stat-sub">⏳ ${cmdsPending} en attente</div></div>
     <div class="stat"><div class="stat-val">${(revenuTotal/1000).toFixed(0)}K</div><div class="stat-lbl">FCFA revenus</div></div>
     <div class="stat"><div class="stat-val">${avgNote}${avgNote!=='—'?'⭐':''}</div><div class="stat-lbl">Note moy.</div><div class="stat-sub">${allAvis?.length||0} avis</div></div>
-    <div class="stat"><div class="stat-val">${audioMsgs?.length||0}</div><div class="stat-lbl">Msgs vocaux</div><div class="stat-sub">🎤 Wolof/FR</div></div>
   </div>
 
   <div class="tab-btns">
     <button class="tab-btn active" onclick="showTab('cmd',this)">📦 Commandes (${commandes?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('rdv',this)">📅 RDV</button>
     <button class="tab-btn" onclick="showTab('msgs',this)">💬 Messages (${msgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('audio',this)">🎤 Vocaux (${audioMsgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('avis',this)">⭐ Avis (${allAvis?.length||0})</button>
     <button class="tab-btn" onclick="showTab('partage',this)">🔗 Partage</button>
+  </div>
+
+  <!-- RDV -->
+  <div id="tab-rdv" class="tab">
+    <div class="card">
+      <div class="card-title">
+        <span>📅 Calendrier des RDV</span>
+        <button class="btn btn-g" style="font-size:11px;padding:5px 10px" onclick="ouvrirConfigDispo()">⚙️ Horaires</button>
+      </div>
+
+      <!-- Sélecteur de semaine -->
+      <div id="rdv-semaine" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:12px;margin-bottom:16px;scrollbar-width:none"></div>
+
+      <!-- RDV de la date sélectionnée -->
+      <div id="rdv-liste"></div>
+    </div>
+
+    <!-- Config horaires -->
+    <div id="config-dispo" style="display:none">
+      <div class="card">
+        <div class="card-title">⚙️ Configurer vos horaires d'ouverture</div>
+        <div id="dispo-form">
+          ${['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'].map((j,i) => `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f0f4f1;flex-wrap:wrap">
+            <div style="width:80px;font-size:13px;font-weight:600;color:#0a1a0f">${j}</div>
+            <input type="checkbox" id="actif-${i+1}" checked style="width:auto"/>
+            <input type="time" id="debut-${i+1}" value="09:00" style="width:100px;padding:4px 8px;font-size:12px"/>
+            <span style="font-size:12px;color:#5a7060">à</span>
+            <input type="time" id="fin-${i+1}" value="18:00" style="width:100px;padding:4px 8px;font-size:12px"/>
+            <select id="slot-${i+1}" style="padding:4px 8px;font-size:12px;border-radius:6px;border:1px solid #d1e5d8">
+              <option value="30">30 min</option>
+              <option value="60" selected>1h</option>
+              <option value="90">1h30</option>
+              <option value="120">2h</option>
+            </select>
+          </div>`).join('')}
+        </div>
+        <div style="margin-top:16px;display:flex;gap:8px">
+          <button class="btn btn-p" onclick="sauvegarderDispo()">💾 Sauvegarder</button>
+          <button class="btn btn-g" onclick="document.getElementById('config-dispo').style.display='none'">Annuler</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- COMMANDES -->
@@ -808,10 +1042,91 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 </div>
 
 <script>
-function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');}
+function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');if(id==='rdv')loadRdvSemaine();}
 function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
 function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
 async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
+
+// ============================================
+// RDV JavaScript
+// ============================================
+var rdvDateSelectionnee = new Date().toISOString().split('T')[0];
+
+async function loadRdvSemaine(){
+  const r = await fetch('/rdv/semaine/${bot.id}');
+  const data = await r.json();
+  const el = document.getElementById('rdv-semaine');
+  el.innerHTML = '';
+  data.jours.forEach(j => {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'min-width:80px;padding:10px 8px;border-radius:10px;border:1.5px solid '+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#d1e5d8')+';background:'+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#fff')+';cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0';
+    btn.innerHTML = '<div style="font-size:11px;font-weight:600;color:'+(j.date===rdvDateSelectionnee?'#fff':'#5a7060')+'">'+j.label+'</div><div style="font-size:16px;font-weight:800;color:'+(j.ferme?'#ccc':(j.date===rdvDateSelectionnee?'#fff':'#0a1a0f'))+'">'+(!j.ferme?j.creneauxDispo:'—')+'</div><div style="font-size:10px;color:'+(j.date===rdvDateSelectionnee?'rgba(255,255,255,.7)':'#9ab0a0')+'">'+(j.ferme?'Fermé':j.creneauxDispo+' libres')+'</div>';
+    if(!j.ferme){btn.onclick=()=>{rdvDateSelectionnee=j.date;loadRdvSemaine();loadRdvListe(j.date);};}
+    el.appendChild(btn);
+  });
+  loadRdvListe(rdvDateSelectionnee);
+
+  // RDV du jour pour le stat
+  const today = await fetch('/rdv/today/${bot.id}').then(r=>r.json());
+  document.getElementById('rdv-today-count').textContent = today.length || '0';
+}
+
+async function loadRdvListe(date){
+  const r = await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const data = await r.json();
+  const el = document.getElementById('rdv-liste');
+
+  if(data.ferme){
+    el.innerHTML = '<div class="empty">'+data.message+'</div>';
+    return;
+  }
+
+  const rdvsConfirmes = await fetch('/rdv/semaine/${bot.id}').then(r=>r.json());
+
+  // Récupère les RDV confirmés pour cette date
+  const rdvsDate = await fetch('/rdv/creneaux/${bot.id}?date='+date).then(r=>r.json());
+
+  const dateLabel = new Date(date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  el.innerHTML = '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
+
+  if(!data.creneaux?.length){el.innerHTML+='<div class="empty">Aucun créneau ce jour</div>';return;}
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px';
+
+  data.creneaux.forEach(c => {
+    const btn = document.createElement('div');
+    btn.style.cssText = 'padding:10px;border-radius:8px;text-align:center;border:1.5px solid '+(c.disponible?'#d1e5d8':'#fee2e2')+';background:'+(c.disponible?'#fff':'#fef2f2');
+    btn.innerHTML = '<div style="font-size:14px;font-weight:700;color:'+(c.disponible?'#0a1a0f':'#ef4444')+'">'+c.heure+'</div><div style="font-size:10px;color:'+(c.disponible?'#00c875':'#ef4444');'font-weight:600;margin-top:2px">'+(c.disponible?'Libre':'Pris')+'</div>';
+    grid.appendChild(btn);
+  });
+
+  el.appendChild(grid);
+}
+
+function ouvrirConfigDispo(){
+  const el = document.getElementById('config-dispo');
+  el.style.display = el.style.display==='none'?'block':'none';
+}
+
+async function sauvegarderDispo(){
+  const jours = [1,2,3,4,5,6,0]; // Lun à Dim
+  const disponibilites = jours.map((j,i) => ({
+    jour: j,
+    actif: document.getElementById('actif-'+(i+1))?.checked,
+    debut: document.getElementById('debut-'+(i+1))?.value || '09:00',
+    fin: document.getElementById('fin-'+(i+1))?.value || '18:00',
+    slot: parseInt(document.getElementById('slot-'+(i+1))?.value || '60')
+  })).filter(d => d.actif);
+
+  await fetch('/rdv/disponibilites/${bot.id}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
+  alert('✅ Horaires sauvegardés!');
+  document.getElementById('config-dispo').style.display='none';
+  loadRdvSemaine();
+}
+
+// Charge les RDV au démarrage
+loadRdvSemaine();
 setTimeout(()=>location.reload(),60000);
 </script>
 </body></html>`);
@@ -1363,6 +1678,34 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 .actions{display:flex;flex-wrap:wrap;gap:6px;padding:3px 12px 6px 52px}
 .act{display:inline-flex;align-items:center;gap:4px;padding:7px 13px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:none;font-family:inherit;text-decoration:none}
 .act-maps{background:#e8f5e9;color:#1b5e20}.act-phone{background:#e3f2fd;color:#0d47a1}.act-whatsapp{background:#dcfce7;color:#166534}.act-wave{background:#dbeafe;color:#1e40af}.act-om{background:#ffedd5;color:#9a3412}.act-cash{background:#f0fdf4;color:#15803d}.act-share{background:#f3e5f5;color:#4a148c}.act-hours{background:#fff8e1;color:#e65100}
+.act-rdv{background:#f0fdf4;color:#166534;font-weight:700;border:1.5px solid #bbf7d0}
+.rdv-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:flex-end;justify-content:center}
+.rdv-sheet{background:#fff;border-radius:20px 20px 0 0;padding:20px;width:100%;max-width:500px;max-height:80vh;overflow-y:auto;animation:slideUp .3s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.rdv-title{font-size:16px;font-weight:700;color:#0a1a0f;margin-bottom:4px}
+.rdv-sub{font-size:13px;color:#5a7060;margin-bottom:16px}
+.rdv-days{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;margin-bottom:16px;scrollbar-width:none}
+.rdv-days::-webkit-scrollbar{display:none}
+.rdv-day{min-width:70px;padding:10px 6px;border-radius:10px;border:1.5px solid #d1e5d8;background:#fff;cursor:pointer;text-align:center;transition:all .15s;flex-shrink:0}
+.rdv-day.sel{border-color:${bot.couleur};background:${bot.couleur}}
+.rdv-day-lbl{font-size:10px;font-weight:600;color:#5a7060}
+.rdv-day.sel .rdv-day-lbl{color:rgba(255,255,255,.8)}
+.rdv-day-num{font-size:18px;font-weight:800;color:#0a1a0f}
+.rdv-day.sel .rdv-day-num{color:#fff}
+.rdv-day-free{font-size:10px;color:#00c875;font-weight:600}
+.rdv-day.sel .rdv-day-free{color:rgba(255,255,255,.8)}
+.rdv-day.ferme{opacity:.4;cursor:not-allowed}
+.rdv-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.rdv-slot{padding:12px 8px;border-radius:8px;border:1.5px solid #d1e5d8;background:#fff;cursor:pointer;text-align:center;font-size:14px;font-weight:700;color:#0a1a0f;transition:all .15s}
+.rdv-slot:hover{border-color:${bot.couleur};color:${bot.couleur}}
+.rdv-slot.sel{background:${bot.couleur};border-color:${bot.couleur};color:#fff}
+.rdv-slot.pris{background:#f9fafb;border-color:#e5e7eb;color:#d1d5db;cursor:not-allowed;text-decoration:line-through}
+.rdv-form{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.rdv-input{border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;width:100%}
+.rdv-input:focus{border-color:${bot.couleur}}
+.rdv-confirm-btn{width:100%;height:48px;background:${bot.couleur};color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .15s}
+.rdv-confirm-btn:hover{opacity:.9}
+.rdv-cancel{width:100%;background:none;border:none;color:#9ab0a0;font-size:13px;cursor:pointer;padding:8px;font-family:inherit;margin-top:4px}
 .act-geoloc{background:#e0f2fe;color:#0369a1;font-weight:700;border:1.5px solid #bae6fd}
 .act-address{background:#f8fafc;color:#475569;border:1.5px solid #e2e8f0}
 .geo-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0}
@@ -1443,6 +1786,23 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 </div>
 <div class="pw">Propulsé par <a href="${base}" target="_blank">SamaBot IA</a></div>
 
+<!-- MODAL RDV -->
+<div class="rdv-modal" id="rdv-modal" style="display:none">
+  <div class="rdv-sheet">
+    <div class="rdv-title">📅 Prendre rendez-vous</div>
+    <div class="rdv-sub">Choisissez une date et un créneau</div>
+    <div class="rdv-days" id="rdv-days"></div>
+    <div class="rdv-slots" id="rdv-slots"><div style="text-align:center;color:#9ab0a0;font-size:13px;grid-column:span 3">Sélectionnez une date</div></div>
+    <div class="rdv-form" id="rdv-form" style="display:none">
+      <input class="rdv-input" id="rdv-nom" placeholder="Votre nom *"/>
+      <input class="rdv-input" id="rdv-tel" placeholder="Votre téléphone" type="tel"/>
+      <input class="rdv-input" id="rdv-service" placeholder="Service souhaité"/>
+    </div>
+    <button class="rdv-confirm-btn" id="rdv-confirm-btn" onclick="confirmerRdv()" style="display:none">✅ Confirmer le rendez-vous</button>
+    <button class="rdv-cancel" onclick="fermerRdv()">Annuler</button>
+  </div>
+</div>
+
 <!-- MODAL GÉOLOCALISATION -->
 <div class="geo-modal" id="geo-modal" style="display:none">
   <div class="geo-sheet">
@@ -1496,6 +1856,14 @@ function renderActions(actions){
   var el=document.getElementById('actions');el.innerHTML='';
   if(!actions?.length)return;
   actions.forEach(function(a){
+    if(a.type==='rdv'){
+      var b=document.createElement('button');
+      b.className='act act-rdv';
+      b.textContent='📅 Voir les créneaux';
+      b.onclick=ouvrirRdv;
+      el.appendChild(b);
+      return;
+    }
     if(a.type==='geoloc'){
       var b=document.createElement('button');
       b.className='act act-geoloc';
@@ -1519,6 +1887,67 @@ function renderActions(actions){
     if(a.url){var l=document.createElement('a');l.className='act act-'+a.type;l.textContent=a.label;l.href=a.url;l.target='_blank';l.rel='noopener';el.appendChild(l);}
   });
 }
+
+// ============================================
+// SYSTÈME RDV
+// ============================================
+var rdvDateSel=null, rdvHeureSel=null;
+
+async function ouvrirRdv(){
+  document.getElementById('rdv-modal').style.display='flex';
+  await chargerSemaineRdv();
+}
+function fermerRdv(){document.getElementById('rdv-modal').style.display='none';rdvDateSel=null;rdvHeureSel=null;}
+
+async function chargerSemaineRdv(){
+  const r=await fetch('/rdv/semaine/${bot.id}');
+  const data=await r.json();
+  const el=document.getElementById('rdv-days');
+  el.innerHTML='';
+  data.jours.forEach(j=>{
+    const d=document.createElement('div');
+    d.className='rdv-day'+(j.ferme?' ferme':'')+(j.date===rdvDateSel?' sel':'');
+    d.innerHTML='<div class="rdv-day-lbl">'+j.label.split(' ')[0]+'</div><div class="rdv-day-num">'+(!j.ferme?j.creneauxDispo:'×')+'</div><div class="rdv-day-free">'+(j.ferme?'Fermé':'libres')+'</div>';
+    if(!j.ferme)d.onclick=()=>{rdvDateSel=j.date;chargerSemaineRdv();chargerCreneaux(j.date);};
+    el.appendChild(d);
+  });
+}
+
+async function chargerCreneaux(date){
+  const r=await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const data=await r.json();
+  const el=document.getElementById('rdv-slots');
+  el.innerHTML='';
+  if(data.ferme){el.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:13px;grid-column:span 3">'+data.message+'</div>';return;}
+  data.creneaux.forEach(c=>{
+    const s=document.createElement('div');
+    s.className='rdv-slot'+(!c.disponible?' pris':'')+(c.heure===rdvHeureSel?' sel':'');
+    s.textContent=c.heure;
+    if(c.disponible)s.onclick=()=>{rdvHeureSel=c.heure;chargerCreneaux(date);document.getElementById('rdv-form').style.display='flex';document.getElementById('rdv-confirm-btn').style.display='block';};
+    el.appendChild(s);
+  });
+}
+
+async function confirmerRdv(){
+  var nom=document.getElementById('rdv-nom').value.trim();
+  if(!nom){alert('Entrez votre nom');return;}
+  if(!rdvDateSel||!rdvHeureSel){alert('Choisissez une date et un créneau');return;}
+  var btn=document.getElementById('rdv-confirm-btn');
+  btn.textContent='⏳ Confirmation...';btn.disabled=true;
+  try{
+    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
+    var data=await r.json();
+    if(data.success){
+      fermerRdv();
+      document.getElementById('actions').innerHTML='';
+      const dl=new Date(rdvDateSel+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+      addMsg('✅ RDV confirmé!\\n\\n📅 '+dl+'\\n🕐 '+rdvHeureSel+'\\n👤 '+nom+'\\n\\nJërëjëf! Nous vous attendons.',false);
+    }else{alert('Erreur: '+(data.error||'Réessayez'));}
+  }catch(e){alert('Erreur réseau');}
+  btn.textContent='✅ Confirmer le rendez-vous';btn.disabled=false;
+}
+
+document.getElementById('rdv-modal').onclick=function(e){if(e.target===this)fermerRdv();};
 
 // ============================================
 // GÉOLOCALISATION
@@ -1871,15 +2300,16 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'5.1', status:'active',
-  features:['geolocalisation-gps','reverse-geocoding','upload-images-supabase','vocal-whisper-wolof','paiement-wave-om','logo-client','catalogue-photos','dashboard-5tabs','avis-clients','qr-code','commandes','widget-universel']
+  app:'🤖 SamaBot IA', version:'6.0', status:'active',
+  features:['rendez-vous-calendrier','geolocalisation-gps','reverse-geocoding','upload-images-supabase','vocal-whisper-wolof','paiement-wave-om','logo-client','catalogue-photos','dashboard-6tabs','avis-clients','qr-code','commandes','widget-universel']
 }));
 
 app.get('/privacy', (req,res) => res.send('<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px"><h1 style="color:#00c875">Politique de confidentialité — SamaBot</h1><p style="margin-top:16px;line-height:1.7">SamaBot collecte uniquement les messages nécessaires au fonctionnement du chatbot. Contact: gakououssou@gmail.com</p></body></html>'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🤖 SamaBot v5.1 — port ${PORT}`);
+  console.log(`🤖 SamaBot v6.0 — port ${PORT}`);
+  console.log(`📅 RDV: système complet activé`);
   console.log(`📍 Géoloc: activée (Nominatim)`);
   console.log(`📸 Storage: ${STORAGE_URL}/object/public/${BUCKET}/`);
   console.log(`🎤 Whisper: activé`);
