@@ -22,6 +22,8 @@ const CONFIG = {
   META_ACCESS_TOKEN:    process.env.META_ACCESS_TOKEN,
   BASE_URL:             process.env.BASE_URL || 'https://api.samabot.app',
   RESEND_API_KEY:       process.env.RESEND_API_KEY, // Gratuit sur resend.com
+  WASENDER_API_KEY:     process.env.WASENDER_API_KEY, // 6$/mois sur wasenderapi.com
+  WASENDER_SESSION_ID:  process.env.WASENDER_SESSION_ID, // ID de la session WaSender
 };
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
@@ -666,6 +668,27 @@ async function sendEmail(to, subject, html) {
   }
 }
 
+// Envoie un vrai message WhatsApp via WaSenderAPI
+async function sendWhatsApp(to, message) {
+  if (!CONFIG.WASENDER_API_KEY) {
+    console.log(`📱 WhatsApp simulé → ${to}: ${message.substring(0,60)}...`);
+    return false;
+  }
+  try {
+    const phone = to.replace(/[\s\-()]/g,'').startsWith('+')
+      ? to.replace(/[\s\-()]/g,'')
+      : '+' + to.replace(/[\s\-()]/g,'');
+    const res = await fetch('https://www.wasenderapi.com/api/send-message', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${CONFIG.WASENDER_API_KEY}` },
+      body: JSON.stringify({ to: phone, text: message })
+    });
+    const data = await res.json();
+    if (res.ok) { console.log(`📱 WhatsApp envoyé à ${phone} ✅`); return true; }
+    else { console.error(`📱 WhatsApp erreur:`, JSON.stringify(data)); return false; }
+  } catch(e) { console.error('sendWhatsApp error:', e.message); return false; }
+}
+
 // Génère le lien WhatsApp de notification
 function whatsappNotifUrl(phone, message) {
   const n = phone.replace(/[\s+\-()]/g, '');
@@ -741,12 +764,11 @@ async function notifyPatron(botId, commande) {
       await sendEmail(bot.notifications_email, `📦 Nouvelle commande ${numero} — ${total} FCFA`, html);
     }
 
-    // ---- WHATSAPP (lien auto-généré dans les logs) ----
+    // ---- WHATSAPP ----
     if (bot.notifications_phone) {
       const msg = `🔔 *SamaBot — Nouvelle commande!*\n\n📦 *${numero}*\n💰 Total: *${total} FCFA*\n💳 Paiement: ${methode}\n📍 Adresse: ${adresse}\n\n👉 Dashboard: ${CONFIG.BASE_URL}/dashboard/${botId}`;
-      const waUrl = whatsappNotifUrl(bot.notifications_phone, msg);
-      console.log(`📱 WhatsApp notif: ${waUrl}`);
-      // En prod: tu peux envoyer ce lien via un SMS ou via l'API WhatsApp officielle
+      const sent = await sendWhatsApp(bot.notifications_phone, msg);
+      if (!sent) console.log(`📱 WhatsApp fallback: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
     }
   } catch(e) {
     console.error('notifyPatron error:', e.message);
@@ -806,7 +828,8 @@ async function notifyRdv(botId, rdv) {
     // ---- WHATSAPP ----
     if (bot.notifications_phone) {
       const msg = `📅 *SamaBot — Nouveau RDV!*\n\n👤 *${rdv.client_nom || 'Client'}*\n📆 ${dateLabel}\n🕐 ${rdv.heure}\n💅 ${rdv.service || 'RDV'}\n📞 ${rdv.client_tel || 'Non renseigné'}\n\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
-      console.log(`📱 WhatsApp RDV: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
+      const sent = await sendWhatsApp(bot.notifications_phone, msg);
+      if (!sent) console.log(`📱 WhatsApp RDV fallback: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
     }
   } catch(e) {
     console.error('notifyRdv error:', e.message);
@@ -825,7 +848,7 @@ async function notifyNouveauMessage(botId, message) {
 
     if (bot.notifications_phone) {
       const msg = `💬 *SamaBot — Nouveaux messages*\n\n${bot.nom} a reçu des messages.\n\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
-      console.log(`📱 WhatsApp messages: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
+      await sendWhatsApp(bot.notifications_phone, msg);
     }
   } catch(e) {}
 }
@@ -849,6 +872,8 @@ async function saveMsg(botId, sessionId, userMsg, botReply) {
       db.insert('messages', { conversation_id:convId, bot_id:botId, role:'user', content:userMsg }),
       db.insert('messages', { conversation_id:convId, bot_id:botId, role:'assistant', content:botReply })
     ]);
+    // Notifie le patron tous les 5 messages
+    notifyNouveauMessage(botId, userMsg).catch(()=>{});
   } catch(e) { console.error('saveMsg:', e.message); }
 }
 
