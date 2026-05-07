@@ -2,12 +2,6 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-// ============================================
-// BOTSEN SERVER — Clés sécurisées via Railway
-// ============================================
-// NE JAMAIS mettre les vraies clés ici !
-// Tu les entres directement sur Railway → Variables
-
 const CONFIG = {
   META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN || 'botsen_verify_2025',
   META_ACCESS_TOKEN: process.env.META_ACCESS_TOKEN,
@@ -15,9 +9,6 @@ const CONFIG = {
   WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
 };
 
-// ============================================
-// BOTS PAR NICHE
-// ============================================
 const BOTS = {
   restaurant_teranga: {
     niche: 'restaurant',
@@ -90,9 +81,6 @@ Réponds en moins de 3 phrases. Propose toujours de prendre RDV.`,
   }
 };
 
-// ============================================
-// HISTORIQUE CONVERSATIONS (mémoire du bot)
-// ============================================
 const conversations = {};
 
 function getHistory(userId) {
@@ -106,9 +94,6 @@ function addToHistory(userId, role, content) {
   if (history.length > 10) history.shift();
 }
 
-// ============================================
-// APPEL OPENAI
-// ============================================
 async function callOpenAI(botConfig, userId, userMessage) {
   const history = getHistory(userId);
   addToHistory(userId, 'user', userMessage);
@@ -136,11 +121,12 @@ async function callOpenAI(botConfig, userId, userMessage) {
   return reply;
 }
 
-// ============================================
-// ENVOYER MESSAGE INSTAGRAM
-// ============================================
 async function sendInstagramMessage(recipientId, message) {
-  const response = await fetch('https://graph.facebook.com/v18.0/me/messages', {
+  const url = `https://graph.facebook.com/v18.0/me/messages`;
+  console.log(`📤 Envoi Instagram à ${recipientId}`);
+  console.log(`🔑 Token: ${CONFIG.META_ACCESS_TOKEN ? CONFIG.META_ACCESS_TOKEN.substring(0,20) + '...' : 'MANQUANT!'}`);
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -151,12 +137,12 @@ async function sendInstagramMessage(recipientId, message) {
       message: { text: message }
     })
   });
-  return response.json();
+
+  const result = await response.json();
+  console.log(`📤 Meta résultat:`, JSON.stringify(result));
+  return result;
 }
 
-// ============================================
-// ENVOYER MESSAGE WHATSAPP
-// ============================================
 async function sendWhatsAppMessage(to, message) {
   const response = await fetch(
     `https://graph.facebook.com/v18.0/${CONFIG.WHATSAPP_PHONE_ID}/messages`,
@@ -174,17 +160,15 @@ async function sendWhatsAppMessage(to, message) {
       })
     }
   );
-  return response.json();
+  const result = await response.json();
+  console.log(`📤 WhatsApp résultat:`, JSON.stringify(result));
+  return result;
 }
 
-// Trouve quel bot utiliser selon la page qui reçoit le message
 function findBot(pageId) {
   return Object.values(BOTS).find(b => b.pageId === pageId) || BOTS.restaurant_teranga;
 }
 
-// ============================================
-// WEBHOOK — VÉRIFICATION META
-// ============================================
 app.get('/webhook', (req, res) => {
   const mode      = req.query['hub.mode'];
   const token     = req.query['hub.verify_token'];
@@ -198,16 +182,12 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// ============================================
-// WEBHOOK — RÉCEPTION DES MESSAGES
-// ============================================
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
   try {
     const body = req.body;
 
-    // Instagram / Facebook Messenger
     if (body.object === 'instagram' || body.object === 'page') {
       const entry     = body.entry?.[0];
       const messaging = entry?.messaging?.[0];
@@ -221,12 +201,11 @@ app.post('/webhook', async (req, res) => {
 
         const botConfig = findBot(pageId);
         const reply     = await callOpenAI(botConfig, senderId, message);
+        console.log(`✅ Réponse OpenAI: ${reply}`);
         await sendInstagramMessage(senderId, reply);
-        console.log(`✅ Réponse: ${reply}`);
       }
     }
 
-    // WhatsApp
     if (body.object === 'whatsapp_business_account') {
       const entry   = body.entry?.[0];
       const change  = entry?.changes?.[0];
@@ -241,19 +220,16 @@ app.post('/webhook', async (req, res) => {
 
         const botConfig = findBot(pageId);
         const reply     = await callOpenAI(botConfig, from, text);
+        console.log(`✅ Réponse OpenAI: ${reply}`);
         await sendWhatsAppMessage(from, reply);
-        console.log(`✅ Réponse: ${reply}`);
       }
     }
 
   } catch (error) {
-    console.error('❌ Erreur:', error);
+    console.error('❌ Erreur complète:', error.message, error.stack);
   }
 });
 
-// ============================================
-// ROUTES UTILES
-// ============================================
 app.get('/', (req, res) => {
   res.json({
     status: '🚀 BotSen Server actif',
@@ -268,9 +244,6 @@ app.get('/bots', (req, res) => {
   })));
 });
 
-// ============================================
-// POLITIQUE DE CONFIDENTIALITÉ
-// ============================================
 app.get('/privacy', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -288,33 +261,22 @@ app.get('/privacy', (req, res) => {
     <body>
       <h1>Politique de confidentialité — BotSen</h1>
       <p>Dernière mise à jour : Mai 2025</p>
-
       <h2>1. Collecte des données</h2>
-      <p>BotSen collecte uniquement les messages nécessaires au fonctionnement du chatbot. Les données collectées incluent les messages envoyés par les utilisateurs via Instagram, WhatsApp et Facebook Messenger.</p>
-
+      <p>BotSen collecte uniquement les messages nécessaires au fonctionnement du chatbot.</p>
       <h2>2. Utilisation des données</h2>
-      <p>Les données sont utilisées exclusivement pour générer des réponses automatiques via notre service de chatbot. Elles ne sont pas utilisées à des fins publicitaires.</p>
-
+      <p>Les données sont utilisées exclusivement pour générer des réponses automatiques.</p>
       <h2>3. Partage des données</h2>
-      <p>Les données ne sont pas partagées avec des tiers, à l'exception des services nécessaires au fonctionnement du bot (OpenAI pour la génération de réponses).</p>
-
+      <p>Les données ne sont pas partagées avec des tiers, sauf OpenAI pour la génération de réponses.</p>
       <h2>4. Conservation des données</h2>
-      <p>Les conversations sont conservées temporairement en mémoire et supprimées automatiquement après chaque session.</p>
-
-      <h2>5. Vos droits</h2>
-      <p>Vous pouvez demander la suppression de vos données à tout moment en nous contactant.</p>
-
-      <h2>6. Contact</h2>
-      <p>Pour toute question : <a href="mailto:gakououssou@gmail.com">gakououssou@gmail.com</a></p>
+      <p>Les conversations sont supprimées automatiquement après chaque session.</p>
+      <h2>5. Contact</h2>
+      <p>Email: <a href="mailto:gakououssou@gmail.com">gakououssou@gmail.com</a></p>
     </body>
     </html>
   `);
 });
 
-// ============================================
-// DÉMARRAGE
-// ============================================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 BotSen démarré sur port ${PORT}`);
   console.log(`📡 Webhook: https://TON-APP.railway.app/webhook`);
