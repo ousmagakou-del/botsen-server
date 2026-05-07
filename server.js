@@ -21,6 +21,7 @@ const CONFIG = {
   META_VERIFY_TOKEN:    process.env.META_VERIFY_TOKEN || 'samabot_verify_2025',
   META_ACCESS_TOKEN:    process.env.META_ACCESS_TOKEN,
   BASE_URL:             process.env.BASE_URL || 'https://api.samabot.app',
+  RESEND_API_KEY:       process.env.RESEND_API_KEY, // Gratuit sur resend.com
 };
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
@@ -574,9 +575,12 @@ app.post('/rdv/create', async (req, res) => {
     });
 
     // Notifie le patron
-    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone`);
-    const bot = bots?.[0];
-    console.log(`📅 Nouveau RDV: ${clientNom} le ${date} à ${heure} chez ${bot?.nom}`);
+    const bots2 = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone`);
+    const bot2 = bots2?.[0];
+    console.log(`📅 Nouveau RDV: ${clientNom} le ${date} à ${heure} chez ${bot2?.nom}`);
+
+    // Notifie le patron par email + WhatsApp
+    if (rdv?.[0]) notifyRdv(botId, rdv[0]).catch(()=>{});
 
     res.json({ success: true, rdv: rdv?.[0] });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -632,13 +636,198 @@ app.post('/rdv/disponibilites/:botId', async (req, res) => {
 });
 
 // ============================================
-// NOTIFICATIONS
+// NOTIFICATIONS — Email + WhatsApp
 // ============================================
+
+// Envoie email via Resend (gratuit jusqu'à 3000 emails/mois)
+async function sendEmail(to, subject, html) {
+  if (!CONFIG.RESEND_API_KEY) {
+    console.log(`📧 Email simulé → ${to}: ${subject}`);
+    return;
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CONFIG.RESEND_API_KEY}`
+      },
+      body: JSON.stringify({
+        from: 'SamaBot <notifications@samabot.app>',
+        to: [to],
+        subject,
+        html
+      })
+    });
+    const data = await res.json();
+    console.log(`📧 Email envoyé à ${to}: ${data.id || JSON.stringify(data)}`);
+  } catch(e) {
+    console.error('Email error:', e.message);
+  }
+}
+
+// Génère le lien WhatsApp de notification
+function whatsappNotifUrl(phone, message) {
+  const n = phone.replace(/[\s+\-()]/g, '');
+  return `https://wa.me/${n}?text=${encodeURIComponent(message)}`;
+}
+
+// ============ NOTIFICATION COMMANDE ============
 async function notifyPatron(botId, commande) {
-  const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone`);
-  const bot = bots?.[0];
-  if (!bot) return;
-  console.log(`🔔 Commande ${commande.numero} — ${bot.nom} — ${commande.total} FCFA`);
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_email,notifications_phone,couleur`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    const itemsText = Array.isArray(commande.items)
+      ? commande.items.map(i => `• ${i.nom || i} — ${i.prix ? i.prix.toLocaleString('fr-FR')+' FCFA' : ''}`).join('\n')
+      : '';
+    const total = (commande.total || 0).toLocaleString('fr-FR');
+    const adresse = commande.adresse_livraison || 'Non spécifiée';
+    const methode = commande.methode_paiement || 'Non spécifié';
+    const numero = commande.numero || 'N/A';
+
+    console.log(`🔔 Nouvelle commande ${numero} — ${bot.nom} — ${total} FCFA`);
+
+    // ---- EMAIL ----
+    if (bot.notifications_email) {
+      const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:#0a1a0f;padding:20px 24px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:22px">📦</span>
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#fff">Nouvelle commande!</div>
+        <div style="font-size:12px;color:#00c875;margin-top:2px">${bot.nom}</div>
+      </div>
+    </div>
+    <div style="padding:24px">
+      <div style="background:#f0f4f1;border-radius:8px;padding:16px;margin-bottom:16px">
+        <div style="font-size:12px;color:#5a7060;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Référence</div>
+        <div style="font-size:20px;font-weight:800;color:#0a1a0f">${numero}</div>
+      </div>
+      ${itemsText ? `
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:#5a7060;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Articles</div>
+        <div style="font-size:14px;color:#0a1a0f;line-height:1.7;white-space:pre-line">${itemsText}</div>
+      </div>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#5a7060;margin-bottom:4px">Total</div>
+          <div style="font-size:18px;font-weight:800;color:#00c875">${total} FCFA</div>
+        </div>
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#5a7060;margin-bottom:4px">Paiement</div>
+          <div style="font-size:14px;font-weight:600;color:#0a1a0f">${methode}</div>
+        </div>
+      </div>
+      <div style="background:#e8f5e9;border-radius:8px;padding:12px;margin-bottom:20px">
+        <div style="font-size:11px;color:#5a7060;margin-bottom:4px">📍 Adresse de livraison</div>
+        <div style="font-size:14px;font-weight:600;color:#0a1a0f">${adresse}</div>
+      </div>
+      <a href="${CONFIG.BASE_URL}/dashboard/${botId}" style="display:block;background:#00c875;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none">
+        📊 Voir le dashboard →
+      </a>
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">
+      SamaBot IA — samabot.app
+    </div>
+  </div>
+</body>
+</html>`;
+      await sendEmail(bot.notifications_email, `📦 Nouvelle commande ${numero} — ${total} FCFA`, html);
+    }
+
+    // ---- WHATSAPP (lien auto-généré dans les logs) ----
+    if (bot.notifications_phone) {
+      const msg = `🔔 *SamaBot — Nouvelle commande!*\n\n📦 *${numero}*\n💰 Total: *${total} FCFA*\n💳 Paiement: ${methode}\n📍 Adresse: ${adresse}\n\n👉 Dashboard: ${CONFIG.BASE_URL}/dashboard/${botId}`;
+      const waUrl = whatsappNotifUrl(bot.notifications_phone, msg);
+      console.log(`📱 WhatsApp notif: ${waUrl}`);
+      // En prod: tu peux envoyer ce lien via un SMS ou via l'API WhatsApp officielle
+    }
+  } catch(e) {
+    console.error('notifyPatron error:', e.message);
+  }
+}
+
+// ============ NOTIFICATION RDV ============
+async function notifyRdv(botId, rdv) {
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_email,notifications_phone`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    const dateLabel = new Date(rdv.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+
+    console.log(`📅 Nouveau RDV: ${rdv.client_nom} — ${dateLabel} à ${rdv.heure} chez ${bot.nom}`);
+
+    // ---- EMAIL ----
+    if (bot.notifications_email) {
+      const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:#0a1a0f;padding:20px 24px">
+      <div style="font-size:16px;font-weight:700;color:#fff">📅 Nouveau rendez-vous!</div>
+      <div style="font-size:12px;color:#00c875;margin-top:2px">${bot.nom}</div>
+    </div>
+    <div style="padding:24px">
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;margin-bottom:20px">
+        <div style="font-size:24px;font-weight:800;color:#0a1a0f;text-transform:capitalize">${dateLabel}</div>
+        <div style="font-size:28px;font-weight:800;color:#00c875;margin-top:4px">${rdv.heure}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#5a7060;margin-bottom:4px">👤 Client</div>
+          <div style="font-size:14px;font-weight:700;color:#0a1a0f">${rdv.client_nom || 'N/A'}</div>
+        </div>
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#5a7060;margin-bottom:4px">📞 Téléphone</div>
+          <div style="font-size:14px;font-weight:700;color:#0a1a0f">${rdv.client_tel || 'Non renseigné'}</div>
+        </div>
+      </div>
+      ${rdv.service ? `<div style="background:#f0f4f1;border-radius:8px;padding:12px;margin-bottom:20px"><div style="font-size:11px;color:#5a7060;margin-bottom:4px">💅 Service</div><div style="font-size:14px;font-weight:700;color:#0a1a0f">${rdv.service}</div></div>` : ''}
+      <a href="${CONFIG.BASE_URL}/dashboard/${botId}" style="display:block;background:#00c875;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none">
+        📅 Voir le calendrier →
+      </a>
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">SamaBot IA — samabot.app</div>
+  </div>
+</body>
+</html>`;
+      await sendEmail(bot.notifications_email, `📅 Nouveau RDV — ${rdv.client_nom} le ${dateLabel} à ${rdv.heure}`, html);
+    }
+
+    // ---- WHATSAPP ----
+    if (bot.notifications_phone) {
+      const msg = `📅 *SamaBot — Nouveau RDV!*\n\n👤 *${rdv.client_nom || 'Client'}*\n📆 ${dateLabel}\n🕐 ${rdv.heure}\n💅 ${rdv.service || 'RDV'}\n📞 ${rdv.client_tel || 'Non renseigné'}\n\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
+      console.log(`📱 WhatsApp RDV: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
+    }
+  } catch(e) {
+    console.error('notifyRdv error:', e.message);
+  }
+}
+
+// ============ NOTIFICATION MESSAGE (toutes les 5 msgs) ============
+async function notifyNouveauMessage(botId, message) {
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_email,notifications_phone,messages_count`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    // Notifie seulement tous les 5 messages pour ne pas spammer
+    if ((bot.messages_count || 0) % 5 !== 0) return;
+
+    if (bot.notifications_phone) {
+      const msg = `💬 *SamaBot — Nouveaux messages*\n\n${bot.nom} a reçu des messages.\n\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
+      console.log(`📱 WhatsApp messages: ${whatsappNotifUrl(bot.notifications_phone, msg)}`);
+    }
+  } catch(e) {}
 }
 
 // ============================================
@@ -733,7 +922,7 @@ app.post('/bot/create', async (req, res) => {
   try {
     const { nom, niche, adresse, horaires, services, telephone, paiement, maps_url,
             wave_number, om_number, couleur, email, logo_url, catalogue,
-            notifications_phone, custom_welcome } = req.body;
+            notifications_phone, notifications_email, custom_welcome } = req.body;
     if (!nom||!niche) return res.status(400).json({ error:'nom et niche requis' });
 
     const id = makeBotId(nom);
@@ -743,7 +932,7 @@ app.post('/bot/create', async (req, res) => {
       telephone:telephone||null, paiement:paiement||'Wave, Orange Money, espèces',
       maps_url:maps_url||null, wave_number:wave_number||null, om_number:om_number||null,
       logo_url:logo_url||null, catalogue:catalogue||[],
-      notifications_phone:notifications_phone||null, custom_welcome:custom_welcome||null,
+      notifications_phone:notifications_phone||null, notifications_email:notifications_email||email||null, custom_welcome:custom_welcome||null,
       user_id:'00000000-0000-0000-0000-000000000001'
     };
     botData.prompt = makePrompt(botData);
@@ -1295,8 +1484,9 @@ textarea{min-height:80px;resize:vertical}
     <div class="ctitle"><span class="num">5</span> Notifications & Design</div>
     <div class="row2">
       <div class="f"><label>WhatsApp notifs commandes</label><input id="notif" placeholder="+221 77 xxx xxxx"/></div>
-      <div class="f"><label>Email</label><input id="eml" type="email" placeholder="votre@email.com"/></div>
+      <div class="f"><label>Email notifications</label><input id="notif_email" type="email" placeholder="patron@monbusiness.com"/></div>
     </div>
+    <div class="f"><label style="color:#5a7060;font-size:11px">💡 Vous recevrez un email à chaque commande et RDV</label></div>
     <div class="f">
       <label>Couleur du bot</label>
       <div class="cols">
@@ -1402,7 +1592,8 @@ async function create(){
       wave_number:document.getElementById('wave').value,
       om_number:document.getElementById('om').value,
       notifications_phone:document.getElementById('notif').value,
-      email:document.getElementById('eml').value,
+      notifications_email:document.getElementById('notif_email').value,
+      email:document.getElementById('notif_email').value,
       couleur:cv
     })});
     var d=await r.json();
