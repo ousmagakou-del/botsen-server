@@ -21,13 +21,129 @@ const CONFIG = {
   META_VERIFY_TOKEN:    process.env.META_VERIFY_TOKEN || 'samabot_verify_2025',
   META_ACCESS_TOKEN:    process.env.META_ACCESS_TOKEN,
   BASE_URL:             process.env.BASE_URL || 'https://api.samabot.app',
-  RESEND_API_KEY:       process.env.RESEND_API_KEY, // Gratuit sur resend.com
-  WASENDER_API_KEY:     process.env.WASENDER_API_KEY, // 6$/mois sur wasenderapi.com
-  WASENDER_SESSION_ID:  process.env.WASENDER_SESSION_ID, // ID de la session WaSender
+  RESEND_API_KEY:       process.env.RESEND_API_KEY,
+  WASENDER_API_KEY:     process.env.WASENDER_API_KEY,
+  WASENDER_SESSION_ID:  process.env.WASENDER_SESSION_ID,
+  JWT_SECRET:           process.env.JWT_SECRET || 'samabot_jwt_secret_2025',
+  GOOGLE_CLIENT_ID:     process.env.GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
 };
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
 const BUCKET = 'samabot-media';
+
+// ============================================
+// I18N — Multi-langue
+// ============================================
+const i18n = {
+  fr: {
+    dashboard_title: 'Dashboard',
+    msgs_today: 'Msgs aujourd\'hui',
+    rdv_today: 'RDV aujourd\'hui',
+    orders: 'Commandes',
+    revenue: 'FCFA revenus',
+    avg_rating: 'Note moy.',
+    tab_orders: 'Commandes',
+    tab_rdv: 'RDV',
+    tab_messages: 'Messages',
+    tab_audio: 'Vocaux',
+    tab_reviews: 'Avis',
+    tab_share: 'Partage',
+    recent_orders: '📦 Commandes récentes',
+    no_orders: 'Aucune commande encore. Partagez votre lien de chat !',
+    pending_alert: '⚠️ commande(s) en attente !',
+    client: 'Client',
+    phone: 'Téléphone',
+    address: 'Adresse livraison',
+    payment: 'Paiement',
+    articles: 'Articles',
+    call: '📞 Appeler',
+    status_pending: '⏳ En attente',
+    status_confirmed: '✅ Confirmée',
+    status_preparing: '👨‍🍳 En préparation',
+    status_ready: '✅ Prête',
+    status_delivering: '🛵 En livraison',
+    status_delivered: '📦 Livrée',
+    status_cancelled: '❌ Annulée',
+    status_paid: '💰 Payée',
+    online: 'En direct',
+    offline: 'Hors ligne',
+    lang_label: 'Langue',
+  },
+  en: {
+    dashboard_title: 'Dashboard',
+    msgs_today: 'Msgs today',
+    rdv_today: 'Appointments today',
+    orders: 'Orders',
+    revenue: 'Revenue (FCFA)',
+    avg_rating: 'Avg rating',
+    tab_orders: 'Orders',
+    tab_rdv: 'Appointments',
+    tab_messages: 'Messages',
+    tab_audio: 'Voice',
+    tab_reviews: 'Reviews',
+    tab_share: 'Share',
+    recent_orders: '📦 Recent orders',
+    no_orders: 'No orders yet. Share your chat link!',
+    pending_alert: '⚠️ order(s) pending!',
+    client: 'Client',
+    phone: 'Phone',
+    address: 'Delivery address',
+    payment: 'Payment',
+    articles: 'Items',
+    call: '📞 Call',
+    status_pending: '⏳ Pending',
+    status_confirmed: '✅ Confirmed',
+    status_preparing: '👨‍🍳 Preparing',
+    status_ready: '✅ Ready',
+    status_delivering: '🛵 Delivering',
+    status_delivered: '📦 Delivered',
+    status_cancelled: '❌ Cancelled',
+    status_paid: '💰 Paid',
+    online: 'Online',
+    offline: 'Offline',
+    lang_label: 'Language',
+  },
+  pt: {
+    dashboard_title: 'Painel',
+    msgs_today: 'Msgs hoje',
+    rdv_today: 'Consultas hoje',
+    orders: 'Pedidos',
+    revenue: 'Receita (FCFA)',
+    avg_rating: 'Nota média',
+    tab_orders: 'Pedidos',
+    tab_rdv: 'Consultas',
+    tab_messages: 'Mensagens',
+    tab_audio: 'Voz',
+    tab_reviews: 'Avaliações',
+    tab_share: 'Partilhar',
+    recent_orders: '📦 Pedidos recentes',
+    no_orders: 'Sem pedidos ainda. Partilhe o seu link!',
+    pending_alert: '⚠️ pedido(s) pendente(s)!',
+    client: 'Cliente',
+    phone: 'Telefone',
+    address: 'Endereço de entrega',
+    payment: 'Pagamento',
+    articles: 'Artigos',
+    call: '📞 Ligar',
+    status_pending: '⏳ Pendente',
+    status_confirmed: '✅ Confirmado',
+    status_preparing: '👨‍🍳 A preparar',
+    status_ready: '✅ Pronto',
+    status_delivering: '🛵 A entregar',
+    status_delivered: '📦 Entregue',
+    status_cancelled: '❌ Cancelado',
+    status_paid: '💰 Pago',
+    online: 'Online',
+    offline: 'Offline',
+    lang_label: 'Idioma',
+  }
+};
+
+function t(lang, key) {
+  return (i18n[lang] || i18n.fr)[key] || i18n.fr[key] || key;
+}
+
 
 // ============================================
 // SUPABASE DB
@@ -454,8 +570,183 @@ app.post('/commande/create', async (req, res) => {
 
 app.patch('/commande/:id/statut', async (req, res) => {
   try {
-    await db.update('commandes', { statut:req.body.statut, updated_at:new Date().toISOString() }, `?id=eq.${req.params.id}`);
+    const { statut } = req.body;
+    await db.update('commandes', { statut, updated_at:new Date().toISOString() }, `?id=eq.${req.params.id}`);
+
+    // Notifie le client du changement de statut
+    notifyClientStatut(req.params.id, statut).catch(()=>{});
+
     res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// NOTIFICATION CLIENT — Changement de statut
+// ============================================
+async function notifyClientStatut(commandeId, statut) {
+  try {
+    const cmds = await db.select('commandes', `?id=eq.${commandeId}`);
+    const cmd = cmds?.[0];
+    if (!cmd) return;
+
+    const bots = await db.select('bots', `?id=eq.${cmd.bot_id}&select=nom,couleur,logo_url,telephone`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    const messages = {
+      preparing: { emoji:'👨‍🍳', titre:'En préparation', msg:`Votre commande ${cmd.numero} est en cours de préparation!` },
+      ready:     { emoji:'✅', titre:'Prête!', msg:`Votre commande ${cmd.numero} est prête! On prépare la livraison.` },
+      delivering:{ emoji:'🛵', titre:'En route!', msg:`Votre commande ${cmd.numero} est en route vers vous! Restez disponible.` },
+      delivered: { emoji:'🎉', titre:'Livrée!', msg:`Votre commande ${cmd.numero} a été livrée. Bon appétit! Jerejef 🙏` },
+      cancelled: { emoji:'❌', titre:'Annulée', msg:`Votre commande ${cmd.numero} a été annulée. Contactez-nous: ${bot.telephone||''}` },
+    };
+
+    const info = messages[statut];
+    if (!info) return;
+
+    // WhatsApp au client si on a son numéro
+    if (cmd.client_tel) {
+      const waMsg = `${info.emoji} *${bot.nom}*\n\n${info.msg}`;
+      const sent = await sendWhatsApp(cmd.client_tel, waMsg);
+      if (!sent) console.log(`📱 Statut client fallback: ${whatsappNotifUrl(cmd.client_tel, waMsg)}`);
+    }
+
+    // Email au client si on a son email
+    if (cmd.client_email && CONFIG.RESEND_API_KEY) {
+      const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:${bot.couleur||'#00c875'};padding:20px;text-align:center">
+      <div style="font-size:36px;margin-bottom:8px">${info.emoji}</div>
+      <div style="font-size:16px;font-weight:700;color:#fff">${info.titre}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.8);margin-top:4px">${bot.nom}</div>
+    </div>
+    <div style="padding:24px;text-align:center">
+      <div style="font-size:16px;color:#0a1a0f;margin-bottom:16px">${info.msg}</div>
+      <div style="background:#f0f4f1;border-radius:8px;padding:12px;display:inline-block">
+        <div style="font-size:12px;color:#9ab0a0">Commande</div>
+        <div style="font-size:18px;font-weight:800;color:#0a1a0f">${cmd.numero}</div>
+        <div style="font-size:14px;font-weight:700;color:#00c875;margin-top:4px">${(cmd.total||0).toLocaleString('fr-FR')} FCFA</div>
+      </div>
+    </div>
+    <div style="padding:14px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">SamaBot — samabot.app</div>
+  </div>
+</body></html>`;
+      await sendEmail(cmd.client_email, `${info.emoji} ${info.titre} — ${cmd.numero} · ${bot.nom}`, html);
+    }
+
+    console.log(`📲 Client notifié: ${statut} → ${cmd.client_tel||cmd.client_email||'?'}`);
+  } catch(e) { console.error('notifyClientStatut:', e.message); }
+}
+
+// ============================================
+// IMPORT CATALOGUE — depuis site web ou API
+// ============================================
+
+// Import depuis une URL (scraping simple)
+app.post('/import/catalogue', async (req, res) => {
+  try {
+    const { botId, url, type, apiKey } = req.body;
+    if (!botId || !url) return res.status(400).json({ error:'botId et url requis' });
+
+    let produits = [];
+
+    if (type === 'shopify') {
+      // Shopify — API publique products.json
+      const shopUrl = url.replace(/\/$/, '');
+      const r = await fetch(`${shopUrl}/products.json?limit=100`, {
+        headers: apiKey ? { 'X-Shopify-Access-Token': apiKey } : {}
+      });
+      const data = await r.json();
+      produits = (data.products||[]).map(p => ({
+        nom: p.title,
+        prix: Math.round(parseFloat(p.variants?.[0]?.price||0) * 655), // USD → FCFA approx
+        desc: p.body_html?.replace(/<[^>]*>/g,'').substring(0,100)||'',
+        image: p.images?.[0]?.src||null,
+        emoji: '🛍️'
+      }));
+
+    } else if (type === 'woocommerce') {
+      // WooCommerce REST API
+      const r = await fetch(`${url}/wp-json/wc/v3/products?per_page=50&consumer_key=${apiKey?.split(':')[0]||''}&consumer_secret=${apiKey?.split(':')[1]||''}`);
+      const data = await r.json();
+      produits = (data||[]).map(p => ({
+        nom: p.name,
+        prix: Math.round(parseFloat(p.price||0)),
+        desc: p.short_description?.replace(/<[^>]*>/g,'').substring(0,100)||'',
+        image: p.images?.[0]?.src||null,
+        emoji: '🛍️'
+      }));
+
+    } else if (type === 'json') {
+      // API JSON générique — format [{nom, prix, description, image}]
+      const r = await fetch(url, { headers: apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {} });
+      const data = await r.json();
+      const items = Array.isArray(data) ? data : data.products || data.items || data.data || [];
+      produits = items.map(p => ({
+        nom: p.nom || p.name || p.title || p.label || '?',
+        prix: parseInt(p.prix || p.price || p.cost || 0),
+        desc: (p.description || p.desc || p.details || '').substring(0,100),
+        image: p.image || p.photo || p.img || p.thumbnail || null,
+        emoji: '🛍️'
+      }));
+
+    } else {
+      // Scraping basique — cherche des patterns prix dans la page
+      const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SamaBot/1.0' } });
+      const html = await r.text();
+
+      // Cherche les prix en FCFA ou F CFA
+      const matches = [...html.matchAll(/([A-Za-zÀ-ÿ\s]{3,50})[^<]*?(\d[\d\s]{2,8})\s*(?:FCFA|F CFA|CFA|Fr)/gi)];
+      produits = matches.slice(0,20).map(m => ({
+        nom: m[1].trim().substring(0,50),
+        prix: parseInt(m[2].replace(/\s/g,'')),
+        desc: '',
+        image: null,
+        emoji: '🛍️'
+      })).filter(p => p.nom.length > 2 && p.prix > 0);
+    }
+
+    if (!produits.length) return res.status(404).json({ error:'Aucun produit trouvé', tip:'Essayez type=json avec une API' });
+
+    // Sauvegarde dans le bot
+    await db.update('bots', {
+      catalogue: produits,
+      updated_at: new Date().toISOString()
+    }, `?id=eq.${botId}`);
+
+    // Rebuild le prompt
+    const bots = await db.select('bots', `?id=eq.${botId}`);
+    if (bots?.[0]) {
+      const newPrompt = makePrompt(bots[0]);
+      await db.update('bots', { prompt: newPrompt }, `?id=eq.${botId}`);
+    }
+
+    console.log(`📥 Import catalogue: ${produits.length} produits → bot ${botId}`);
+    res.json({ success:true, count:produits.length, produits: produits.slice(0,5), message:`${produits.length} produits importés dans le catalogue` });
+
+  } catch(e) {
+    console.error('Import catalogue error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sync automatique (webhook ou cron)
+app.post('/import/sync/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&select=id,catalogue_url,catalogue_type,catalogue_api_key`);
+    const bot = bots?.[0];
+    if (!bot?.catalogue_url) return res.status(400).json({ error:'Pas d\'URL de sync configurée' });
+
+    // Re-import depuis l'URL sauvegardée
+    const importRes = await fetch(`${CONFIG.BASE_URL}/import/catalogue`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ botId: bot.id, url: bot.catalogue_url, type: bot.catalogue_type, apiKey: bot.catalogue_api_key })
+    });
+    const data = await importRes.json();
+    res.json(data);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
@@ -472,6 +763,140 @@ app.post('/avis', async (req, res) => {
       await db.update('bots', { avg_rating:parseFloat(avg.toFixed(2)) }, `?id=eq.${botId}`);
     }
     res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// AUTH CLIENTS — Login / Register simple
+// ============================================
+
+// Simple token generator (sans dépendance externe)
+function generateToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 })).toString('base64');
+  const sig = Buffer.from(userId + CONFIG.JWT_SECRET).toString('base64').substring(0,16);
+  return `${payload}.${sig}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [payload] = token.split('.');
+    const data = JSON.parse(Buffer.from(payload, 'base64').toString());
+    if (data.exp < Date.now()) return null;
+    return data.userId;
+  } catch(e) { return null; }
+}
+
+// ============================================
+// AUTH — Google OAuth + Email/Password
+// ============================================
+
+// Google OAuth — Step 1: redirect
+app.get('/auth/google', (req, res) => {
+  if (!CONFIG.GOOGLE_CLIENT_ID) return res.status(500).send('Google OAuth non configuré');
+  const params = new URLSearchParams({
+    client_id: CONFIG.GOOGLE_CLIENT_ID,
+    redirect_uri: `${CONFIG.BASE_URL}/auth/google/callback`,
+    response_type: 'code',
+    scope: 'openid email profile',
+    prompt: 'select_account'
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+// Google OAuth — Step 2: callback
+app.get('/auth/google/callback', async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) return res.redirect('/login?error=google_failed');
+
+    // Échange code contre token
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: CONFIG.GOOGLE_CLIENT_ID,
+        client_secret: CONFIG.GOOGLE_CLIENT_SECRET,
+        redirect_uri: `${CONFIG.BASE_URL}/auth/google/callback`,
+        grant_type: 'authorization_code'
+      })
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) return res.redirect('/login?error=google_token');
+
+    // Récupère infos utilisateur
+    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+    const profile = await profileRes.json();
+    if (!profile.email) return res.redirect('/login?error=google_profile');
+
+    // Trouve ou crée l'utilisateur
+    let users = await db.select('users', `?email=eq.${encodeURIComponent(profile.email)}`);
+    let user;
+    if (users?.length) {
+      user = users[0];
+    } else {
+      const created = await db.insert('users', {
+        email: profile.email,
+        nom: profile.name || profile.email.split('@')[0],
+        plan: 'free',
+        actif: true,
+        google_id: profile.sub,
+        avatar_url: profile.picture || null
+      });
+      user = created?.[0];
+    }
+    if (!user) return res.redirect('/login?error=user_create');
+
+    const token = generateToken(user.id);
+
+    // Redirige vers /app avec token dans URL (récupéré par JS)
+    res.redirect(`/app?token=${token}&user=${encodeURIComponent(JSON.stringify({ id:user.id, email:user.email, nom:user.nom, plan:user.plan, avatar:user.avatar_url }))}`);
+  } catch(e) {
+    console.error('Google OAuth error:', e.message);
+    res.redirect('/login?error=server');
+  }
+});
+
+// Register email/password
+app.post('/auth/register', async (req, res) => {
+  try {
+    const { email, password, nom } = req.body;
+    if (!email||!password) return res.status(400).json({ error:'email et password requis' });
+    const existing = await db.select('users', `?email=eq.${encodeURIComponent(email)}`);
+    if (existing?.length) return res.status(409).json({ error:'Email déjà utilisé' });
+    const passHash = Buffer.from(password + CONFIG.JWT_SECRET).toString('base64');
+    const user = await db.insert('users', { email, nom:nom||email.split('@')[0], plan:'free', actif:true, password_hash:passHash });
+    if (!user?.[0]) return res.status(500).json({ error:'Erreur création compte' });
+    const token = generateToken(user[0].id);
+    res.json({ success:true, token, user:{ id:user[0].id, email, nom:user[0].nom, plan:'free' } });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Login email/password
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email||!password) return res.status(400).json({ error:'email et password requis' });
+    const users = await db.select('users', `?email=eq.${encodeURIComponent(email)}`);
+    if (!users?.length) return res.status(401).json({ error:'Email ou mot de passe incorrect' });
+    const user = users[0];
+    const passHash = Buffer.from(password + CONFIG.JWT_SECRET).toString('base64');
+    if (user.password_hash !== passHash) return res.status(401).json({ error:'Email ou mot de passe incorrect' });
+    const token = generateToken(user.id);
+    res.json({ success:true, token, user:{ id:user.id, email:user.email, nom:user.nom, plan:user.plan } });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Mes bots
+app.get('/auth/my-bots', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ','');
+    const userId = verifyToken(token);
+    if (!userId) return res.status(401).json({ error:'Non autorisé' });
+    const bots = await db.select('bots', `?user_id=eq.${userId}&actif=eq.true&order=created_at.desc`);
+    res.json(bots||[]);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
@@ -583,7 +1008,7 @@ app.get('/rdv/semaine/:botId', async (req, res) => {
 // Créer un RDV
 app.post('/rdv/create', async (req, res) => {
   try {
-    const { botId, sessionId, clientNom, clientTel, service, date, heure, notes } = req.body;
+    const { botId, sessionId, clientNom, clientTel, clientEmail, service, date, heure, notes } = req.body;
     if (!botId || !date || !heure) return res.status(400).json({ error: 'botId, date et heure requis' });
 
     // Vérifie que le créneau est encore disponible
@@ -607,7 +1032,11 @@ app.post('/rdv/create', async (req, res) => {
     console.log(`📅 Nouveau RDV: ${clientNom} le ${date} à ${heure} chez ${bot2?.nom}`);
 
     // Notifie le patron par email + WhatsApp
-    if (rdv?.[0]) notifyRdv(botId, rdv[0]).catch(()=>{});
+    if (rdv?.[0]) {
+      notifyRdv(botId, rdv[0]).catch(()=>{});
+      // Confirmation au client si email fourni
+      if (clientEmail) sendConfirmationRdvClient(botId, rdv[0], clientEmail).catch(()=>{});
+    }
 
     res.json({ success: true, rdv: rdv?.[0] });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -861,7 +1290,114 @@ async function notifyRdv(botId, rdv) {
   }
 }
 
-// ============ NOTIFICATION MESSAGE (toutes les 5 msgs) ============
+// ============ CONFIRMATION EMAIL CLIENT — COMMANDE ============
+async function sendConfirmationClient(botId, commande, clientEmail) {
+  if (!clientEmail || !CONFIG.RESEND_API_KEY) return;
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,couleur,logo_url`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    const total = (commande.total||0).toLocaleString('fr-FR');
+    const numero = commande.numero || 'CMD-???';
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:${bot.couleur||'#00c875'};padding:24px;text-align:center">
+      ${bot.logo_url?`<img src="${bot.logo_url}" style="width:60px;height:60px;border-radius:12px;object-fit:cover;margin-bottom:10px"/><br/>`:''}
+      <div style="font-size:18px;font-weight:700;color:#fff">${bot.nom}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.8);margin-top:4px">Confirmation de commande</div>
+    </div>
+    <div style="padding:28px">
+      <div style="font-size:22px;margin-bottom:6px">✅ Commande confirmée!</div>
+      <div style="font-size:14px;color:#5a7060;margin-bottom:24px">Votre commande a bien été reçue.</div>
+      <div style="background:#f0f4f1;border-radius:10px;padding:16px;margin-bottom:16px">
+        <div style="font-size:12px;color:#9ab0a0;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Référence</div>
+        <div style="font-size:20px;font-weight:800;color:#0a1a0f">${numero}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#9ab0a0;margin-bottom:4px">Total</div>
+          <div style="font-size:18px;font-weight:800;color:#00c875">${total} FCFA</div>
+        </div>
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#9ab0a0;margin-bottom:4px">Statut</div>
+          <div style="font-size:14px;font-weight:700;color:#0a1a0f">En préparation</div>
+        </div>
+      </div>
+      ${commande.adresse_livraison?`<div style="background:#e8f5e9;border-radius:8px;padding:12px;margin-bottom:16px"><div style="font-size:11px;color:#9ab0a0;margin-bottom:4px">📍 Livraison</div><div style="font-size:14px;font-weight:600;color:#0a1a0f">${commande.adresse_livraison}</div></div>`:''}
+      <div style="text-align:center;padding:16px;background:#f9f9f9;border-radius:8px">
+        <div style="font-size:13px;color:#5a7060">Merci pour votre commande!</div>
+        <div style="font-size:12px;color:#9ab0a0;margin-top:4px">Nous vous contacterons dès que votre commande sera prête.</div>
+      </div>
+    </div>
+    <div style="padding:14px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">
+      Propulsé par <strong style="color:#00c875">SamaBot</strong> — samabot.app
+    </div>
+  </div>
+</body></html>`;
+
+    await sendEmail(clientEmail, `✅ Commande confirmée — ${numero} · ${bot.nom}`, html);
+    console.log(`📧 Confirmation client envoyée à ${clientEmail}`);
+  } catch(e) { console.error('sendConfirmationClient:', e.message); }
+}
+
+// ============ CONFIRMATION EMAIL CLIENT — RDV ============
+async function sendConfirmationRdvClient(botId, rdv, clientEmail) {
+  if (!clientEmail || !CONFIG.RESEND_API_KEY) return;
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,couleur,logo_url,adresse,telephone`);
+    const bot = bots?.[0];
+    if (!bot) return;
+
+    const dateLabel = new Date(rdv.date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:${bot.couleur||'#00c875'};padding:24px;text-align:center">
+      ${bot.logo_url?`<img src="${bot.logo_url}" style="width:60px;height:60px;border-radius:12px;object-fit:cover;margin-bottom:10px"/><br/>`:''}
+      <div style="font-size:18px;font-weight:700;color:#fff">${bot.nom}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.8);margin-top:4px">Confirmation de rendez-vous</div>
+    </div>
+    <div style="padding:28px">
+      <div style="font-size:22px;margin-bottom:6px">📅 RDV confirmé!</div>
+      <div style="font-size:14px;color:#5a7060;margin-bottom:24px">Votre rendez-vous a bien été enregistré.</div>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;margin-bottom:16px;text-align:center">
+        <div style="font-size:26px;font-weight:800;color:#0a1a0f;text-transform:capitalize">${dateLabel}</div>
+        <div style="font-size:32px;font-weight:800;color:#00c875;margin-top:4px">${rdv.heure}</div>
+        ${rdv.service?`<div style="font-size:14px;color:#5a7060;margin-top:8px">💅 ${rdv.service}</div>`:''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#9ab0a0;margin-bottom:4px">👤 Nom</div>
+          <div style="font-size:14px;font-weight:700;color:#0a1a0f">${rdv.client_nom||'Client'}</div>
+        </div>
+        <div style="background:#f0f4f1;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#9ab0a0;margin-bottom:4px">📍 Lieu</div>
+          <div style="font-size:14px;font-weight:700;color:#0a1a0f">${bot.adresse||bot.nom}</div>
+        </div>
+      </div>
+      ${bot.telephone?`<div style="background:#dbeafe;border-radius:8px;padding:12px;margin-bottom:16px;text-align:center"><div style="font-size:13px;color:#1e40af">Pour annuler ou modifier: <strong>${bot.telephone}</strong></div></div>`:''}
+      <div style="text-align:center;padding:16px;background:#f9f9f9;border-radius:8px">
+        <div style="font-size:13px;color:#5a7060">Jerejef! Nous vous attendons.</div>
+      </div>
+    </div>
+    <div style="padding:14px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">
+      Propulsé par <strong style="color:#00c875">SamaBot</strong> — samabot.app
+    </div>
+  </div>
+</body></html>`;
+
+    await sendEmail(clientEmail, `📅 RDV confirmé — ${dateLabel} à ${rdv.heure} · ${bot.nom}`, html);
+    console.log(`📧 Confirmation RDV client envoyée à ${clientEmail}`);
+  } catch(e) { console.error('sendConfirmationRdvClient:', e.message); }
+}
+
+
 async function notifyNouveauMessage(botId, message) {
   try {
     const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_email,notifications_phone,messages_count`);
@@ -899,15 +1435,49 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
     if (cmd?.[0]) {
       console.log(`📦 Commande auto-créée: ${cmd[0].numero} — ${total} FCFA`);
       await notifyPatron(botId, cmd[0]);
+      // Confirmation au client si email dispo dans session
+      const sess = sessions.get(sessionId);
+      if (sess?.clientEmail) sendConfirmationClient(botId, cmd[0], sess.clientEmail).catch(()=>{});
+      // Met à jour avec infos client extraites des messages
+      updateCommandeInfos(cmd[0].id, sessionId, botId).catch(()=>{});
     }
   } catch(e) {
     console.error('autoCreateCommande:', e.message);
   }
 }
 
-// ============================================
-// SAUVEGARDE MESSAGES
-// ============================================
+// Extrait et sauvegarde les infos client depuis les messages de la session
+async function updateCommandeInfos(commandeId, sessionId, botId) {
+  try {
+    // Récupère les derniers messages de la session
+    const msgs = await db.select('messages',
+      `?bot_id=eq.${botId}&conversation_id=in.(select id from conversations where session_id=eq.${sessionId})&role=eq.user&order=created_at.desc&limit=10`
+    );
+    if (!msgs?.length) return;
+
+    const fullText = msgs.map(m=>m.content).join(' ');
+
+    // Extrait téléphone (format sénégalais)
+    const telMatch = fullText.match(/(?:(\+221|00221)?[ ]?)?(?:7[05678][ ]?\d{3}[ ]?\d{2}[ ]?\d{2}|\d{9,10})/);
+    // Extrait adresse depuis les messages GPS
+    const adresseMatch = fullText.match(/Mon adresse de livraison est:\s*([^(]+)/i) ||
+                         fullText.match(/adresse[^:]*:\s*(.+?)(?:\.|GPS|$)/i);
+    // Extrait prénom (1-2 mots après "je suis" ou "c'est" ou "mon nom")
+    const nomMatch = fullText.match(/(?:je suis|c'est|mon (?:nom|prénom) (?:est)?)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
+
+    const updates = {};
+    if (telMatch) updates.client_tel = telMatch[0].replace(/\s/g,'');
+    if (adresseMatch) updates.adresse_livraison = adresseMatch[1].trim();
+    if (nomMatch) updates.client_nom = nomMatch[1].trim();
+
+    if (Object.keys(updates).length > 0) {
+      await db.update('commandes', updates, `?id=eq.${commandeId}`);
+      console.log(`👤 Infos client mis à jour:`, updates);
+    }
+  } catch(e) { console.error('updateCommandeInfos:', e.message); }
+}
+
+
 async function saveMsg(botId, sessionId, userMsg, botReply) {
   try {
     let convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}`);
@@ -950,29 +1520,48 @@ function getQR(n) {
   }[n] || ['💬 Nos services','💰 Tarifs','📍 Adresse','📞 Contact'];
 }
 function makePrompt(bot) {
-  const cat = bot.catalogue?.length ? `\nCATALOGUE:\n${bot.catalogue.map(p=>`- ${p.nom}: ${p.prix} FCFA${p.desc?' ('+p.desc+')':''}`).join('\n')}` : '';
-  return `Tu es l'assistant IA officiel de "${bot.nom}" à Dakar, Sénégal.
-Tu parles français et wolof naturellement. Réponds toujours dans la même langue que le client.
-Tu es chaleureux, professionnel et très utile. Réponds en 2-3 phrases max.
+  const cat = bot.catalogue?.length ? `\nCATALOGUE:\n${bot.catalogue.map(p=>`- ${p.nom}: ${p.prix.toLocaleString('fr-FR')} FCFA${p.desc?' ('+p.desc+')':''}`).join('\n')}` : '';
+  const livraison = bot.livraison_actif ? `\nLIVRAISON:
+- Frais de livraison: ${(bot.livraison_frais||0).toLocaleString('fr-FR')} FCFA
+- Délai: ${bot.livraison_delai||'30-45 min'}
+- Zones: ${bot.livraison_zones||'Dakar'}
+${bot.livraison_min>0?`- Commande minimum: ${bot.livraison_min.toLocaleString('fr-FR')} FCFA`:''}` : '\n- Pas de livraison disponible (vente sur place uniquement)';
 
-INFOS:
+  return `Tu es l'assistant IA officiel de "${bot.nom}" à Dakar, Sénégal.
+Tu parles français et wolof naturellement. Réponds TOUJOURS dans la même langue que le client.
+Tu es chaleureux, professionnel et efficace. Réponds en 2-4 phrases max.
+
+INFOS DU BUSINESS:
 - Nom: ${bot.nom} | Secteur: ${bot.niche}
 ${bot.adresse?`- Adresse: ${bot.adresse}`:''}
 ${bot.horaires?`- Horaires: ${bot.horaires}`:''}
 ${bot.telephone?`- Téléphone: ${bot.telephone}`:''}
 ${bot.services?`- Services: ${bot.services}`:''}
-${bot.paiement?`- Paiement: ${bot.paiement}`:'- Paiement: Wave, Orange Money, espèces'}
+- Paiement accepté: ${bot.paiement||'Wave, Orange Money, espèces'}
 ${cat}
+${livraison}
 
-RÈGLES STRICTES — suis cet ordre:
-1. Client commande → récapitule les articles + total FCFA + demande l'adresse de livraison
-2. Client donne adresse → confirme la commande avec l'adresse + montre les boutons de paiement
-3. Ne jamais confirmer une commande SANS avoir l'adresse de livraison d'abord
-4. Adresse demandée → mentionne que le bouton GPS apparaît ci-dessous
-5. Téléphone demandé → mentionne le bouton d'appel ci-dessous
-6. RDV demandé → mentionne que le calendrier apparaît ci-dessous
-7. TOUJOURS lister les produits/services avec tirets (ex: "- Carte péage: 5 000 FCFA")
-8. Répondre dans la même langue que le client (français ou wolof)`;
+RÈGLES STRICTES — respecte CET ORDRE EXACT:
+ÉTAPE 1 — Client veut commander:
+  → Liste les articles disponibles avec tirets et prix
+  → Demande ce qu'il veut commander
+
+ÉTAPE 2 — Client choisit un article:
+  → Récapitule: "Votre commande: [article] = [prix] FCFA${bot.livraison_actif?`, livraison: ${(bot.livraison_frais||0).toLocaleString('fr-FR')} FCFA`:''}"
+  → Indique le TOTAL exact: "Total: [montant] FCFA"
+  → Demande prénom + téléphone + adresse: "Quel est votre prénom, numéro de téléphone et adresse de livraison? (Le bouton GPS ci-dessous vous facilite la tâche)"
+
+ÉTAPE 3 — Client donne ses infos:
+  → Confirme: "✅ Commande confirmée! Livraison à [adresse] dans ${bot.livraison_delai||'30-45 min'}, [prénom]"
+  → Propose les paiements: "Vous pouvez payer par Wave, Orange Money ou à la livraison"
+
+RÈGLES GÉNÉRALES:
+- TOUJOURS lister produits/services avec tirets (- Article: prix FCFA)
+- Ne JAMAIS confirmer sans adresse de livraison
+- Adresse GPS → mentionner le bouton ci-dessous
+- Téléphone → mentionner le bouton d'appel
+- RDV → mentionner le calendrier ci-dessous
+- En wolof: utiliser "Jerejef", "Waaw", "Asalaa maalekum" naturellement`;
 }
 function makeBotId(nom) {
   return nom.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,'').trim().replace(/\s+/g,'-').substring(0,25)+'-'+Date.now().toString(36);
@@ -991,6 +1580,13 @@ app.get('/bot/:id', async (req, res) => {
       logo:b.logo_url||null, adresse:b.adresse, telephone:b.telephone,
       horaires:b.horaires, wave_number:b.wave_number, om_number:b.om_number,
       catalogue:b.catalogue||[],
+      livraison: b.livraison_actif ? {
+        actif: true,
+        frais: b.livraison_frais||0,
+        delai: b.livraison_delai||'30-45 min',
+        zones: b.livraison_zones||'Dakar',
+        min: b.livraison_min||0
+      } : null,
       welcome: b.custom_welcome || `Asalaa maalekum! 👋 Bienvenue chez *${b.nom}*.\n\nComment puis-je vous aider aujourd'hui?`,
       quickReplies: getQR(b.niche),
       voiceEnabled: true
@@ -1005,7 +1601,8 @@ app.post('/bot/create', async (req, res) => {
   try {
     const { nom, niche, adresse, horaires, services, telephone, paiement, maps_url,
             wave_number, om_number, couleur, email, logo_url, catalogue,
-            notifications_phone, notifications_email, custom_welcome } = req.body;
+            notifications_phone, notifications_email, custom_welcome,
+            livraison_actif, livraison_frais, livraison_delai, livraison_zones, livraison_min } = req.body;
     if (!nom||!niche) return res.status(400).json({ error:'nom et niche requis' });
 
     const id = makeBotId(nom);
@@ -1016,6 +1613,11 @@ app.post('/bot/create', async (req, res) => {
       maps_url:maps_url||null, wave_number:wave_number||null, om_number:om_number||null,
       logo_url:logo_url||null, catalogue:catalogue||[],
       notifications_phone:notifications_phone||null, notifications_email:notifications_email||email||null, custom_welcome:custom_welcome||null,
+      livraison_actif: livraison_actif||false,
+      livraison_frais: livraison_frais||0,
+      livraison_delai: livraison_delai||'30-45 min',
+      livraison_zones: livraison_zones||'Dakar',
+      livraison_min:   livraison_min||0,
       user_id:'00000000-0000-0000-0000-000000000001'
     };
     botData.prompt = makePrompt(botData);
@@ -1050,6 +1652,9 @@ app.get('/dashboard/:botId', async (req, res) => {
     const bot = bots?.[0];
     if (!bot) return res.status(404).send('Bot non trouvé');
 
+    // Langue depuis query param ou cookie ou défaut fr
+    const lang = ['fr','en','pt'].includes(req.query.lang) ? req.query.lang : 'fr';
+
     const [convs, msgs, commandes, allAvis, audioMsgs] = await Promise.all([
       db.select('conversations', `?bot_id=eq.${req.params.botId}&order=last_message_at.desc&limit=30`),
       db.select('messages', `?bot_id=eq.${req.params.botId}&role=eq.user&order=created_at.desc&limit=50`),
@@ -1063,15 +1668,23 @@ app.get('/dashboard/:botId', async (req, res) => {
     const cmdsPending = commandes?.filter(c=>c.statut==='pending').length||0;
     const revenuTotal = commandes?.filter(c=>c.statut==='paid').reduce((s,c)=>s+c.total,0)||0;
     const avgNote = allAvis?.length ? (allAvis.reduce((s,a)=>s+a.note,0)/allAvis.length).toFixed(1) : '—';
-    const statusColors = {pending:'#f59e0b',paid:'#10b981',preparing:'#3b82f6',ready:'#8b5cf6',delivered:'#6b7280',cancelled:'#ef4444'};
-    const statusLabels = {pending:'En attente',paid:'Payé ✅',preparing:'En prépa 👨‍🍳',ready:'Prêt ✅',delivered:'Livré 🛵',cancelled:'Annulé ❌'};
+    const statusColors = {pending:'#f59e0b',paid:'#10b981',preparing:'#3b82f6',ready:'#8b5cf6',delivered:'#6b7280',cancelled:'#ef4444',delivering:'#f59e0b'};
+    const statusLabels = {
+      pending:    t(lang,'status_pending'),
+      paid:       t(lang,'status_paid'),
+      preparing:  t(lang,'status_preparing'),
+      ready:      t(lang,'status_ready'),
+      delivering: t(lang,'status_delivering'),
+      delivered:  t(lang,'status_delivered'),
+      cancelled:  t(lang,'status_cancelled'),
+    };
 
     res.send(`<!DOCTYPE html>
-<html lang="fr">
+<html lang="${lang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>${bot.nom} — Dashboard</title>
+<title>${bot.nom} — ${t(lang,'dashboard_title')}</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -1102,6 +1715,17 @@ body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh;color:
 .card{background:#fff;border-radius:12px;padding:16px;border:1px solid rgba(0,200,117,.1);margin-bottom:12px}
 .card-title{font-size:14px;font-weight:700;color:#0a1a0f;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
 .row{display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:1px solid #f0f4f1;gap:10px}
+.cmd-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px;transition:all .2s}
+.cmd-card:hover{border-color:#d1e5d8;box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.cmd-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.cmd-num{font-size:14px;font-weight:800;color:#0a1a0f}
+.cmd-date{font-size:11px;color:#9ab0a0;margin-top:3px}
+.cmd-right{text-align:right}
+.cmd-infos{display:flex;flex-direction:column;gap:8px;padding:12px;background:#f9faf9;border-radius:8px;margin-bottom:10px}
+.cmd-info-row{display:flex;gap:10px;align-items:flex-start}
+.cmd-info-icon{font-size:15px;flex-shrink:0;margin-top:1px}
+.cmd-info-label{font-size:10px;color:#9ab0a0;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.cmd-info-val{font-size:13px;color:#0a1a0f;font-weight:600;line-height:1.5}
 .row:last-child{border-bottom:none}
 .row-main{font-size:13px;font-weight:600;color:#0a1a0f}
 .row-sub{font-size:11px;color:#9ab0a0;margin-top:2px}
@@ -1128,7 +1752,14 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     ${bot.logo_url?`<img class="bot-logo-sm" src="${bot.logo_url}" alt="${bot.nom}"/>`:`<div class="bot-ava-sm">${bot.emoji}</div>`}
     <span class="bot-nm">${bot.nom}</span>
   </div>
-  <div class="live"><span class="live-dot"></span>En direct</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div class="live"><span class="live-dot"></span>${t(lang,'online')}</div>
+    <select onchange="changeLang(this.value)" style="padding:5px 8px;border-radius:8px;border:1px solid #d1e5d8;font-size:12px;font-family:inherit;background:#fff">
+      <option value="fr" ${lang==='fr'?'selected':''}>🇫🇷 FR</option>
+      <option value="en" ${lang==='en'?'selected':''}>🇬🇧 EN</option>
+      <option value="pt" ${lang==='pt'?'selected':''}>🇵🇹 PT</option>
+    </select>
+  </div>
 </div>
 
 <div class="wrap">
@@ -1139,23 +1770,23 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <button class="btn btn-g" onclick="location.reload()">🔄</button>
   </div>
 
-  ${cmdsPending>0?`<div class="alert">⚠️ ${cmdsPending} commande${cmdsPending>1?'s':''} en attente !</div>`:''}
+  ${cmdsPending>0?`<div class="alert">⚠️ ${cmdsPending} ${t(lang,'pending_alert')}</div>`:''}
 
   <div class="stats">
-    <div class="stat"><div class="stat-val">${msgsToday}</div><div class="stat-lbl">Msgs aujourd'hui</div></div>
-    <div class="stat"><div class="stat-val" id="rdv-today-count">—</div><div class="stat-lbl">RDV aujourd'hui</div><div class="stat-sub">📅 En cours</div></div>
-    <div class="stat"><div class="stat-val">${commandes?.length||0}</div><div class="stat-lbl">Commandes</div><div class="stat-sub">⏳ ${cmdsPending} en attente</div></div>
-    <div class="stat"><div class="stat-val">${(revenuTotal/1000).toFixed(0)}K</div><div class="stat-lbl">FCFA revenus</div></div>
-    <div class="stat"><div class="stat-val">${avgNote}${avgNote!=='—'?'⭐':''}</div><div class="stat-lbl">Note moy.</div><div class="stat-sub">${allAvis?.length||0} avis</div></div>
+    <div class="stat"><div class="stat-val">${msgsToday}</div><div class="stat-lbl">${t(lang,'msgs_today')}</div></div>
+    <div class="stat"><div class="stat-val" id="rdv-today-count">—</div><div class="stat-lbl">${t(lang,'rdv_today')}</div><div class="stat-sub">📅</div></div>
+    <div class="stat"><div class="stat-val">${commandes?.length||0}</div><div class="stat-lbl">${t(lang,'orders')}</div><div class="stat-sub">⏳ ${cmdsPending}</div></div>
+    <div class="stat"><div class="stat-val">${(revenuTotal/1000).toFixed(0)}K</div><div class="stat-lbl">${t(lang,'revenue')}</div></div>
+    <div class="stat"><div class="stat-val">${avgNote}${avgNote!=='—'?'⭐':''}</div><div class="stat-lbl">${t(lang,'avg_rating')}</div><div class="stat-sub">${allAvis?.length||0}</div></div>
   </div>
 
   <div class="tab-btns">
-    <button class="tab-btn active" onclick="showTab('cmd',this)">📦 Commandes (${commandes?.length||0})</button>
-    <button class="tab-btn" onclick="showTab('rdv',this)">📅 RDV</button>
-    <button class="tab-btn" onclick="showTab('msgs',this)">💬 Messages (${msgs?.length||0})</button>
-    <button class="tab-btn" onclick="showTab('audio',this)">🎤 Vocaux (${audioMsgs?.length||0})</button>
-    <button class="tab-btn" onclick="showTab('avis',this)">⭐ Avis (${allAvis?.length||0})</button>
-    <button class="tab-btn" onclick="showTab('partage',this)">🔗 Partage</button>
+    <button class="tab-btn active" onclick="showTab('cmd',this)">📦 ${t(lang,'tab_orders')} (${commandes?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('rdv',this)">📅 ${t(lang,'tab_rdv')}</button>
+    <button class="tab-btn" onclick="showTab('msgs',this)">💬 ${t(lang,'tab_messages')} (${msgs?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('audio',this)">🎤 ${t(lang,'tab_audio')} (${audioMsgs?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('avis',this)">⭐ ${t(lang,'tab_reviews')} (${allAvis?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('partage',this)">🔗 ${t(lang,'tab_share')}</button>
   </div>
 
   <!-- RDV -->
@@ -1205,23 +1836,81 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
   <div id="tab-cmd" class="tab active">
     <div class="card">
       <div class="card-title">📦 Commandes récentes</div>
-      ${commandes?.length?commandes.map(c=>`
-        <div class="row">
-          <div>
-            <div class="row-main">${c.numero||'#'} ${c.client_nom?'— '+c.client_nom:''}</div>
-            <div class="row-sub">${new Date(c.created_at).toLocaleString('fr-FR')}</div>
-            ${c.adresse_livraison?`<div class="row-sub">📍 ${c.adresse_livraison}</div>`:''}
-            ${c.methode_paiement?`<div class="row-sub">💳 ${c.methode_paiement}</div>`:''}
+      ${commandes?.length ? commandes.map(c => `
+        <div class="cmd-card">
+          <div class="cmd-head">
+            <div>
+              <div class="cmd-num">${c.numero||'#'}</div>
+              <div class="cmd-date">${new Date(c.created_at).toLocaleString('fr-FR')}</div>
+            </div>
+            <div class="cmd-right">
+              <div class="price">${(c.total||0).toLocaleString('fr-FR')} F</div>
+              <span class="badge" style="background:${statusColors[c.statut]||'#ccc'}22;color:${statusColors[c.statut]||'#666'}">${statusLabels[c.statut]||c.statut}</span>
+            </div>
           </div>
-          <div class="row-right">
-            <div class="price">${(c.total||0).toLocaleString('fr-FR')} F</div>
-            <span class="badge" style="background:${statusColors[c.statut]||'#ccc'}22;color:${statusColors[c.statut]||'#666'}">${statusLabels[c.statut]||c.statut}</span>
-            <br><select onchange="updateStatut('${c.id}',this.value)">
+
+          <div class="cmd-infos">
+            ${c.client_nom ? `
+            <div class="cmd-info-row">
+              <span class="cmd-info-icon">👤</span>
+              <div>
+                <div class="cmd-info-label">Client</div>
+                <div class="cmd-info-val">${c.client_nom}</div>
+              </div>
+            </div>` : ''}
+
+            ${c.client_tel ? `
+            <div class="cmd-info-row">
+              <span class="cmd-info-icon">📞</span>
+              <div>
+                <div class="cmd-info-label">Téléphone</div>
+                <div class="cmd-info-val">
+                  <a href="tel:${c.client_tel}" style="color:#00c875;font-weight:700;text-decoration:none">${c.client_tel}</a>
+                  &nbsp;
+                  <a href="https://wa.me/${c.client_tel.replace(/[\s+\-()]/g,'')}" target="_blank" style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;text-decoration:none">💬 WhatsApp</a>
+                </div>
+              </div>
+            </div>` : ''}
+
+            ${c.adresse_livraison ? `
+            <div class="cmd-info-row">
+              <span class="cmd-info-icon">📍</span>
+              <div>
+                <div class="cmd-info-label">Adresse livraison</div>
+                <div class="cmd-info-val">${c.adresse_livraison}
+                  ${c.adresse_livraison.includes('maps.google') || c.adresse_livraison.includes('GPS:') ? 
+                    `<br><a href="${c.adresse_livraison.match(/https?:\/\/[^\s)]+/)?.[0]||'#'}" target="_blank" style="color:#00c875;font-size:12px;font-weight:600">🗺️ Voir sur Maps →</a>` : ''}
+                </div>
+              </div>
+            </div>` : ''}
+
+            ${c.methode_paiement ? `
+            <div class="cmd-info-row">
+              <span class="cmd-info-icon">💳</span>
+              <div>
+                <div class="cmd-info-label">Paiement</div>
+                <div class="cmd-info-val">${c.methode_paiement}</div>
+              </div>
+            </div>` : ''}
+
+            ${c.items?.length ? `
+            <div class="cmd-info-row">
+              <span class="cmd-info-icon">🛍️</span>
+              <div>
+                <div class="cmd-info-label">Articles</div>
+                <div class="cmd-info-val">${Array.isArray(c.items) ? c.items.map(i=>i.nom||i).join(', ') : c.items}</div>
+              </div>
+            </div>` : ''}
+          </div>
+
+          <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <select onchange="updateStatut('${c.id}',this.value)" style="flex:1;min-width:140px;padding:8px 10px;border-radius:8px;border:1.5px solid #d1e5d8;font-size:13px;font-weight:600;font-family:inherit;color:#0a1a0f">
               ${Object.entries(statusLabels).map(([k,v])=>`<option value="${k}"${c.statut===k?' selected':''}>${v}</option>`).join('')}
             </select>
+            ${c.client_tel ? `<a href="tel:${c.client_tel}" style="background:#0a1a0f;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none">📞 Appeler</a>` : ''}
           </div>
         </div>
-      `).join(''):`<div class="empty">Aucune commande encore. Partagez votre lien de chat !</div>`}
+      `).join('') : `<div class="empty">Aucune commande encore. Partagez votre lien de chat !</div>`}
     </div>
   </div>
 
@@ -1300,6 +1989,40 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
       </div>
     </div>
+
+    <!-- IMPORT CATALOGUE -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-title">🔄 Import catalogue depuis votre site/app</div>
+      <p style="font-size:13px;color:#5a7060;margin-bottom:14px">
+        Vous avez déjà un site e-commerce ou une app? Importez votre catalogue automatiquement.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div>
+          <label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:5px">Type de plateforme</label>
+          <select id="imp-type" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit">
+            <option value="json">API JSON (universel)</option>
+            <option value="shopify">Shopify</option>
+            <option value="woocommerce">WooCommerce</option>
+            <option value="scrape">Scraping site web</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:5px">URL du site ou API</label>
+          <input id="imp-url" placeholder="https://votresite.com/products.json" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:5px">Clé API (optionnel)</label>
+        <input id="imp-key" placeholder="Laissez vide si pas nécessaire" type="password" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+      </div>
+      <div id="imp-result" style="display:none;padding:10px;border-radius:8px;font-size:13px;margin-bottom:10px"></div>
+      <button class="btn btn-p" id="imp-btn" onclick="importCatalogue()">🔄 Importer le catalogue</button>
+      <div style="margin-top:10px;font-size:11px;color:#9ab0a0">
+        💡 Shopify: entrez l'URL de votre boutique (ex: monshop.myshopify.com)<br>
+        💡 WooCommerce: entrez l'URL + clé API au format clé:secret<br>
+        💡 JSON: votre API doit retourner [{nom, prix, description, image}]
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1314,6 +2037,31 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 </div>
 
 <script>
+async function importCatalogue(){
+  var url=document.getElementById('imp-url').value.trim();
+  var type=document.getElementById('imp-type').value;
+  var key=document.getElementById('imp-key').value.trim();
+  var res=document.getElementById('imp-result');
+  var btn=document.getElementById('imp-btn');
+  if(!url){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez une URL';return;}
+  btn.disabled=true;btn.textContent='⏳ Import en cours...';
+  res.style.display='none';
+  try{
+    var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',url,type,apiKey:key||undefined})});
+    var d=await r.json();
+    if(d.success){
+      res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';
+      res.textContent='✅ '+d.count+' produits importés! Rechargement...';
+      setTimeout(()=>location.reload(),2000);
+    }else{
+      res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+      res.textContent='❌ '+( d.error||'Erreur import')+'. '+(d.tip||'');
+    }
+  }catch(e){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ Erreur réseau';}
+  btn.disabled=false;btn.textContent='🔄 Importer le catalogue';
+}
+
+function changeLang(l){window.location.href='/dashboard/${bot.id}?lang='+l;}
 function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');if(id==='rdv')loadRdvSemaine();}
 function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
 function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
@@ -1530,9 +2278,28 @@ textarea{min-height:80px;resize:vertical}
     <div class="f"><label>Horaires</label><input id="hor" placeholder="Ex: Lun-Ven 9h-20h, Weekend 10h-17h"/></div>
   </div>
 
-  <!-- 3 -->
+  <!-- 3.5 LIVRAISON -->
   <div class="card">
-    <div class="ctitle"><span class="num">3</span> Catalogue & Services</div>
+    <div class="ctitle"><span class="num">3</span> Livraison</div>
+    <div class="f" style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <input type="checkbox" id="liv-actif" style="width:auto;margin:0" onchange="toggleLivraison(this)"/>
+      <label style="margin:0;font-size:14px;font-weight:600;color:#0a1a0f;cursor:pointer" for="liv-actif">Proposer la livraison à domicile</label>
+    </div>
+    <div id="liv-options" style="display:none">
+      <div class="row2">
+        <div class="f"><label>Frais de livraison (FCFA)</label><input id="liv-frais" type="number" min="0" placeholder="Ex: 500" value="500"/></div>
+        <div class="f"><label>Délai de livraison</label><input id="liv-delai" placeholder="Ex: 30-45 min" value="30-45 min"/></div>
+      </div>
+      <div class="row2">
+        <div class="f"><label>Zones de livraison</label><input id="liv-zones" placeholder="Ex: Dakar, Pikine, Guédiawaye"/></div>
+        <div class="f"><label>Commande minimum (FCFA)</label><input id="liv-min" type="number" min="0" placeholder="0 = pas de minimum" value="0"/></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 CATALOGUE -->
+  <div class="card">
+    <div class="ctitle"><span class="num">4</span> Catalogue & Services</div>
     <div class="f"><label>Description générale</label><textarea id="srv" placeholder="Décrivez vos services..."></textarea></div>
     <div class="f">
       <label>Articles du catalogue</label>
@@ -1559,9 +2326,9 @@ textarea{min-height:80px;resize:vertical}
     </div>
   </div>
 
-  <!-- 4 -->
+  <!-- 5 PAIEMENT -->
   <div class="card">
-    <div class="ctitle"><span class="num">4</span> Paiement</div>
+    <div class="ctitle"><span class="num">5</span> Paiement</div>
     <div class="f">
       <label>Moyens acceptés</label>
       <div class="pay-opts">
@@ -1580,7 +2347,7 @@ textarea{min-height:80px;resize:vertical}
 
   <!-- 5 -->
   <div class="card">
-    <div class="ctitle"><span class="num">5</span> Notifications & Design</div>
+    <div class="ctitle"><span class="num">6</span> Notifications & Design</div>
     <div class="row2">
       <div class="f"><label>WhatsApp notifs commandes</label><input id="notif" placeholder="+221 77 xxx xxxx"/></div>
       <div class="f"><label>Email notifications</label><input id="notif_email" type="email" placeholder="patron@monbusiness.com"/></div>
@@ -1618,6 +2385,10 @@ textarea{min-height:80px;resize:vertical}
 <script>
 var nv='restaurant',cv='#00c875';
 var payOpts=['Wave','Orange Money','Espèces'];
+
+function toggleLivraison(cb){
+  document.getElementById('liv-options').style.display=cb.checked?'block':'none';
+}
 
 function selN(e){document.querySelectorAll('.n').forEach(x=>x.classList.remove('s'));e.classList.add('s');nv=e.dataset.val;}
 function selC(e){document.querySelectorAll('.co').forEach(x=>x.classList.remove('s'));e.classList.add('s');cv=e.dataset.val;}
@@ -1717,6 +2488,11 @@ async function create(){
       notifications_phone:document.getElementById('notif').value,
       notifications_email:document.getElementById('notif_email').value,
       email:document.getElementById('notif_email').value,
+      livraison_actif:document.getElementById('liv-actif').checked,
+      livraison_frais:parseInt(document.getElementById('liv-frais').value)||0,
+      livraison_delai:document.getElementById('liv-delai').value||'30-45 min',
+      livraison_zones:document.getElementById('liv-zones').value||'Dakar',
+      livraison_min:parseInt(document.getElementById('liv-min').value)||0,
       couleur:cv
     })});
     var d=await r.json();
@@ -2110,6 +2886,7 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
     <div class="rdv-form" id="rdv-form" style="display:none">
       <input class="rdv-input" id="rdv-nom" placeholder="Votre nom *"/>
       <input class="rdv-input" id="rdv-tel" placeholder="Votre téléphone" type="tel"/>
+      <input class="rdv-input" id="rdv-email" placeholder="Votre email (pour confirmation)" type="email"/>
       <input class="rdv-input" id="rdv-service" placeholder="Service souhaité"/>
     </div>
     <button class="rdv-confirm-btn" id="rdv-confirm-btn" onclick="confirmerRdv()" style="display:none">✅ Confirmer le rendez-vous</button>
@@ -2249,7 +3026,7 @@ async function confirmerRdv(){
   var btn=document.getElementById('rdv-confirm-btn');
   btn.textContent='⏳ Confirmation...';btn.disabled=true;
   try{
-    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
+    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,clientEmail:document.getElementById('rdv-email')?.value||'',service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
     var data=await r.json();
     if(data.success){
       fermerRdv();
@@ -2592,21 +3369,518 @@ function send(t){
 });
 
 // ============================================
-// ADMIN
 // ============================================
+// ADMIN DASHBOARD — Interface complète
+// ============================================
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'samabot_admin_2025';
+
+app.get('/admin', (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET) return res.status(401).send('Non autorisé — ajoutez ?secret=ADMIN_SECRET');
+  res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot — Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:#0a0a0a;color:#fff;min-height:100vh}
+.nav{background:#111;border-bottom:1px solid #222;padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800}.logo span{color:#00c875}
+.badge{background:#00c875;color:#000;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:800;margin-left:8px}
+.wrap{max-width:1200px;margin:0 auto;padding:28px 20px}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px}
+.kpi{background:#111;border:1px solid #222;border-radius:12px;padding:20px}
+.kpi-val{font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:#00c875;line-height:1}
+.kpi-lbl{font-size:12px;color:#666;margin-top:6px}
+.kpi-sub{font-size:11px;color:#444;margin-top:3px}
+.section{margin-bottom:28px}
+.section-title{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.table{width:100%;border-collapse:collapse}
+.table th{background:#111;border:1px solid #222;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666;text-align:left;font-weight:600}
+.table td{border:1px solid #1a1a1a;padding:10px 12px;font-size:13px;color:#ccc;vertical-align:top}
+.table tr:hover td{background:#111}
+.plan-pill{border-radius:20px;padding:2px 8px;font-size:10px;font-weight:800;display:inline-block}
+.plan-free{background:#222;color:#666}
+.plan-starter{background:#1a2e1a;color:#00c875}
+.plan-pro{background:#1a1a2e;color:#6366f1}
+.plan-business{background:#2e1a1a;color:#f59e0b}
+.status-dot{width:6px;height:6px;border-radius:50%;background:#00c875;display:inline-block;margin-right:4px}
+.status-dot.off{background:#ef4444}
+.bot-logo{width:28px;height:28px;border-radius:6px;object-fit:cover;vertical-align:middle;margin-right:6px}
+.bot-ava{width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:14px;vertical-align:middle;margin-right:6px}
+.revenue-bar{height:4px;background:#00c875;border-radius:2px;margin-top:4px}
+.action-btn{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;color:#ccc;cursor:pointer;font-family:inherit;transition:all .15s}
+.action-btn:hover{border-color:#00c875;color:#00c875}
+.msg-bubble{background:#1a1a1a;border-radius:8px;padding:8px 10px;font-size:12px;color:#999;max-width:300px;line-height:1.4}
+.chart-bar{display:flex;align-items:flex-end;gap:4px;height:60px;margin-top:10px}
+.bar{background:#00c875;border-radius:3px 3px 0 0;min-width:20px;transition:height .3s;opacity:.7}
+.bar:hover{opacity:1}
+.tabs{display:flex;gap:0;border-bottom:1px solid #222;margin-bottom:20px}
+.tab{padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;color:#666;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.tab.active{color:#00c875;border-bottom-color:#00c875}
+.tab-content{display:none}.tab-content.active{display:block}
+.search{background:#111;border:1px solid #333;border-radius:8px;padding:8px 14px;font-size:13px;color:#fff;font-family:inherit;outline:none;width:240px}
+.search:focus{border-color:#00c875}
+.flex-between{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+@media(max-width:768px){.kpis{grid-template-columns:repeat(2,1fr)}.table{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div><span class="logo">Sama<span>Bot</span></span><span class="badge">ADMIN</span></div>
+  <div style="font-size:12px;color:#444" id="last-refresh">Chargement...</div>
+</div>
+
+<div class="wrap">
+  <!-- KPIs -->
+  <div class="kpis" id="kpis">
+    <div class="kpi"><div class="kpi-val" id="k-users">—</div><div class="kpi-lbl">Clients</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-bots">—</div><div class="kpi-lbl">Bots actifs</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-msgs">—</div><div class="kpi-lbl">Msgs aujourd'hui</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-orders">—</div><div class="kpi-lbl">Commandes total</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-revenue">—</div><div class="kpi-lbl">Revenus clients</div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('clients',this)">👥 Clients</div>
+    <div class="tab" onclick="showTab('bots',this)">🤖 Bots</div>
+    <div class="tab" onclick="showTab('commandes',this)">📦 Commandes</div>
+    <div class="tab" onclick="showTab('messages',this)">💬 Messages</div>
+  </div>
+
+  <!-- CLIENTS -->
+  <div id="tab-clients" class="tab-content active">
+    <div class="flex-between">
+      <div class="section-title">👥 Tous les clients</div>
+      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-clients',this.value)"/>
+    </div>
+    <table class="table" id="tbl-clients">
+      <thead><tr><th>Client</th><th>Email</th><th>Plan</th><th>Bots</th><th>Inscrit le</th><th>Actions</th></tr></thead>
+      <tbody id="tbody-clients"><tr><td colspan="6" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- BOTS -->
+  <div id="tab-bots" class="tab-content">
+    <div class="flex-between">
+      <div class="section-title">🤖 Tous les bots</div>
+      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-bots',this.value)"/>
+    </div>
+    <table class="table" id="tbl-bots">
+      <thead><tr><th>Bot</th><th>Niche</th><th>Client</th><th>Messages</th><th>Commandes</th><th>Revenus</th><th>Créé le</th><th>Actions</th></tr></thead>
+      <tbody id="tbody-bots"><tr><td colspan="8" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- COMMANDES -->
+  <div id="tab-commandes" class="tab-content">
+    <div class="flex-between">
+      <div class="section-title">📦 Toutes les commandes</div>
+      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-cmds',this.value)"/>
+    </div>
+    <table class="table" id="tbl-cmds">
+      <thead><tr><th>Référence</th><th>Bot</th><th>Client</th><th>Total</th><th>Statut</th><th>Date</th></tr></thead>
+      <tbody id="tbody-cmds"><tr><td colspan="6" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- MESSAGES -->
+  <div id="tab-messages" class="tab-content">
+    <div class="section-title">💬 Messages récents</div>
+    <div id="msgs-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div>
+
+<script>
+var secret = '${ADMIN_SECRET}';
+var allData = {};
+
+function showTab(id,el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-'+id).classList.add('active');
+}
+
+function filterTable(tableId, query){
+  var rows = document.querySelectorAll('#'+tableId+' tbody tr');
+  var q = query.toLowerCase();
+  rows.forEach(r=>{ r.style.display = r.textContent.toLowerCase().includes(q)?'':'none'; });
+}
+
+async function loadData(){
+  try{
+    var r = await fetch('/admin/stats?secret='+secret);
+    var d = await r.json();
+    allData = d;
+
+    // KPIs
+    document.getElementById('k-users').textContent = d.stats.total_users;
+    document.getElementById('k-bots').textContent = d.stats.total_bots;
+    document.getElementById('k-msgs').textContent = d.stats.messages_today;
+    document.getElementById('k-orders').textContent = d.commandes?.length||0;
+    document.getElementById('k-revenue').textContent = ((d.stats.total_revenue||0)/1000).toFixed(0)+'K F';
+    document.getElementById('last-refresh').textContent = 'Mis à jour: '+new Date().toLocaleTimeString('fr-FR');
+
+    // CLIENTS
+    var clientsHtml = '';
+    (d.users||[]).forEach(u=>{
+      var userBots = (d.bots||[]).filter(b=>b.user_id===u.id);
+      clientsHtml += '<tr>'
+        +'<td><strong style="color:#fff">'+( u.nom||'—')+'</strong></td>'
+        +'<td>'+u.email+'</td>'
+        +'<td><span class="plan-pill plan-'+(u.plan||'free')+'">'+( u.plan||'free').toUpperCase()+'</span></td>'
+        +'<td>'+userBots.length+' bot'+(userBots.length!==1?'s':'')+'</td>'
+        +'<td style="color:#444">'+new Date(u.created_at).toLocaleDateString('fr-FR')+'</td>'
+        +'<td><button class="action-btn" onclick="changePlan(\''+u.id+'\')">✏️ Plan</button></td>'
+        +'</tr>';
+    });
+    document.getElementById('tbody-clients').innerHTML = clientsHtml || '<tr><td colspan="6" style="text-align:center;color:#444">Aucun client</td></tr>';
+
+    // BOTS
+    var botsHtml = '';
+    (d.bots||[]).forEach(b=>{
+      var owner = (d.users||[]).find(u=>u.id===b.user_id);
+      var botCmds = (d.commandes||[]).filter(c=>c.bot_id===b.id);
+      var botRevenue = botCmds.filter(c=>c.statut==='paid').reduce((s,c)=>s+(c.total||0),0);
+      botsHtml += '<tr>'
+        +'<td>'+(b.logo_url?'<img class="bot-logo" src="'+b.logo_url+'" alt=""/>':'<span class="bot-ava" style="background:'+b.couleur+'">'+b.emoji+'</span>')+'<strong style="color:#fff">'+b.nom+'</strong></td>'
+        +'<td><span style="background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px">'+b.niche+'</span></td>'
+        +'<td style="color:#888">'+(owner?.email||'—')+'</td>'
+        +'<td>'+(b.messages_count||0)+'</td>'
+        +'<td>'+botCmds.length+'</td>'
+        +'<td style="color:#00c875;font-weight:700">'+(botRevenue/1000).toFixed(0)+'K F</td>'
+        +'<td style="color:#444">'+new Date(b.created_at).toLocaleDateString('fr-FR')+'</td>'
+        +'<td>'
+          +'<a href="/dashboard/'+b.id+'" target="_blank" class="action-btn">📊</a> '
+          +'<a href="/chat/'+b.id+'" target="_blank" class="action-btn">💬</a>'
+        +'</td>'
+        +'</tr>';
+    });
+    document.getElementById('tbody-bots').innerHTML = botsHtml || '<tr><td colspan="8" style="text-align:center;color:#444">Aucun bot</td></tr>';
+
+    // COMMANDES
+    var cmdsHtml = '';
+    (d.commandes||[]).forEach(c=>{
+      var bot = (d.bots||[]).find(b=>b.id===c.bot_id);
+      cmdsHtml += '<tr>'
+        +'<td><strong style="color:#fff;font-size:12px">'+( c.numero||c.id?.substring(0,8))+'</strong></td>'
+        +'<td>'+(bot?.nom||c.bot_id)+'</td>'
+        +'<td>'+(c.client_nom||'—')+(c.client_tel?'<br><span style="color:#444;font-size:11px">'+c.client_tel+'</span>':'')+'</td>'
+        +'<td style="color:#00c875;font-weight:700">'+(c.total||0).toLocaleString('fr-FR')+' F</td>'
+        +'<td><span style="background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px">'+c.statut+'</span></td>'
+        +'<td style="color:#444;font-size:11px">'+new Date(c.created_at).toLocaleString('fr-FR')+'</td>'
+        +'</tr>';
+    });
+    document.getElementById('tbody-cmds').innerHTML = cmdsHtml || '<tr><td colspan="6" style="text-align:center;color:#444">Aucune commande</td></tr>';
+
+    // MESSAGES
+    var msgsHtml = '';
+    (d.recent_messages||[]).slice(0,30).forEach(m=>{
+      var bot = (d.bots||[]).find(b=>b.id===m.bot_id);
+      msgsHtml += '<div style="display:flex;gap:10px;align-items:flex-start">'
+        +'<div style="font-size:10px;color:#444;min-width:80px;padding-top:4px">'+new Date(m.created_at).toLocaleTimeString('fr-FR')+'<br>'+(bot?.nom||'?')+'</div>'
+        +'<div class="msg-bubble">'+(m.content||'').substring(0,200)+'</div>'
+        +'</div>';
+    });
+    document.getElementById('msgs-list').innerHTML = msgsHtml || '<div style="color:#444;text-align:center;padding:20px">Aucun message</div>';
+
+  }catch(e){ console.error('Admin load error:',e); }
+}
+
+async function changePlan(userId){
+  var plan = prompt('Nouveau plan (free/starter/pro/business):');
+  if(!plan) return;
+  var r = await fetch('/admin/user/'+userId+'/plan',{method:'PATCH',headers:{'Content-Type':'application/json','X-Admin-Secret':secret},body:JSON.stringify({plan})});
+  var d = await r.json();
+  if(d.success){ alert('✅ Plan mis à jour!'); loadData(); }
+  else alert('Erreur: '+d.error);
+}
+
+loadData();
+setInterval(loadData, 30000); // Refresh toutes les 30s
+</script>
+</body>
+</html>`);
+});
+
+// Admin API endpoints
 app.get('/admin/stats', async (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET && req.headers['x-admin-secret'] !== ADMIN_SECRET)
+    return res.status(401).json({ error:'Non autorisé' });
   try {
     const [bots, users, msgs, commandes, audio] = await Promise.all([
       db.select('bots','?actif=eq.true&order=created_at.desc'),
       db.select('users','?order=created_at.desc'),
-      db.select('messages','?order=created_at.desc&limit=20'),
-      db.select('commandes','?order=created_at.desc&limit=50'),
+      db.select('messages','?order=created_at.desc&limit=30'),
+      db.select('commandes','?order=created_at.desc&limit=100'),
       db.select('audio_messages','?order=created_at.desc&limit=20')
     ]);
     const msgsToday = msgs?.filter(m=>new Date(m.created_at)>new Date(Date.now()-86400000)).length||0;
-    const revenu = commandes?.filter(c=>c.statut==='paid').reduce((s,c)=>s+c.total,0)||0;
-    res.json({ stats:{total_users:users?.length||0,total_bots:bots?.length||0,messages_today:msgsToday,total_revenue:revenu,total_audio:audio?.length||0}, bots:bots||[], users:users||[], recent_messages:msgs||[], commandes:commandes||[], audio_messages:audio||[] });
+    const revenu = commandes?.filter(c=>c.statut==='paid').reduce((s,c)=>s+(c.total||0),0)||0;
+    res.json({
+      stats:{ total_users:users?.length||0, total_bots:bots?.length||0, messages_today:msgsToday, total_revenue:revenu, total_audio:audio?.length||0 },
+      bots:bots||[], users:users||[], recent_messages:msgs||[], commandes:commandes||[], audio_messages:audio||[]
+    });
   } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Admin — changer plan d'un user
+app.patch('/admin/user/:id/plan', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== ADMIN_SECRET && req.query.secret !== ADMIN_SECRET)
+    return res.status(401).json({ error:'Non autorisé' });
+  try {
+    const { plan } = req.body;
+    if (!['free','starter','pro','business'].includes(plan)) return res.status(400).json({ error:'Plan invalide' });
+    await db.update('users', { plan, updated_at:new Date().toISOString() }, `?id=eq.${req.params.id}`);
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Admin — désactiver un bot
+app.patch('/admin/bot/:id/toggle', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== ADMIN_SECRET)
+    return res.status(401).json({ error:'Non autorisé' });
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.id}`);
+    const bot = bots?.[0];
+    if (!bot) return res.status(404).json({ error:'Bot non trouvé' });
+    await db.update('bots', { actif:!bot.actif }, `?id=eq.${req.params.id}`);
+    res.json({ success:true, actif:!bot.actif });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+
+// ============================================
+// AUTH — Login / Register / My bots
+// ============================================
+function generateToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 })).toString('base64');
+  const sig = Buffer.from(userId + CONFIG.JWT_SECRET).toString('base64').substring(0,16);
+  return `${payload}.${sig}`;
+}
+function verifyToken(token) {
+  try {
+    const [payload] = (token||'').split('.');
+    const data = JSON.parse(Buffer.from(payload, 'base64').toString());
+    if (data.exp < Date.now()) return null;
+    return data.userId;
+  } catch(e) { return null; }
+}
+
+app.get('/login', (req, res) => {
+  const error = req.query.error;
+  const googleEnabled = !!(CONFIG.GOOGLE_CLIENT_ID);
+  res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot — Connexion</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.box{background:#fff;border-radius:16px;padding:36px 32px;width:100%;max-width:420px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.logo{font-family:'Syne',sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-bottom:6px}.logo span{color:#00c875}
+.sub{font-size:14px;color:#5a7060;margin-bottom:24px}
+.btn-google{width:100%;background:#fff;color:#3c4043;border:1.5px solid #dadce0;border-radius:10px;padding:13px 14px;font-size:14px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;text-decoration:none}
+.btn-google:hover{background:#f8f9fa;border-color:#c6c9cc}
+.btn-google svg{flex-shrink:0}
+.divider{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.divider-line{flex:1;height:1px;background:#e5e7eb}
+.divider-txt{font-size:12px;color:#9ab0a0;white-space:nowrap}
+.tabs{display:flex;margin-bottom:20px;border-bottom:2px solid #e5e7eb}
+.tab{flex:1;padding:10px;text-align:center;font-size:14px;font-weight:600;cursor:pointer;color:#9ab0a0;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab.active{color:#00c875;border-bottom-color:#00c875}
+.form{display:none}.form.active{display:block}
+label{font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:5px}
+input{width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:14px;transition:border .15s;color:#0a1a0f}
+input:focus{border-color:#00c875}
+.btn{width:100%;background:#00c875;color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s}
+.btn:hover{background:#00a862}.btn:disabled{opacity:.6;cursor:not-allowed}
+.msg{border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px;display:none}
+.msg.show{display:block}.msg.err{background:#fee2e2;color:#dc2626}.msg.ok{background:#dcfce7;color:#166534}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">Sama<span>Bot</span></div>
+  <p class="sub">Gérez votre assistant IA</p>
+
+  ${googleEnabled ? `
+  <a href="/auth/google" class="btn-google">
+    <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/><path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
+    Continuer avec Google
+  </a>
+  <div class="divider"><div class="divider-line"></div><div class="divider-txt">ou avec email</div><div class="divider-line"></div></div>
+  ` : ''}
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('login',this)">Connexion</div>
+    <div class="tab" onclick="showTab('register',this)">Créer un compte</div>
+  </div>
+  <div id="msg" class="msg"></div>
+  <div id="form-login" class="form active">
+    <label>Email</label><input id="l-email" type="email" placeholder="votre@email.com"/>
+    <label>Mot de passe</label><input id="l-pass" type="password" placeholder="••••••••"/>
+    <button class="btn" id="l-btn" onclick="login()">Se connecter →</button>
+  </div>
+  <div id="form-register" class="form">
+    <label>Nom</label><input id="r-nom" placeholder="Votre nom"/>
+    <label>Email</label><input id="r-email" type="email" placeholder="votre@email.com"/>
+    <label>Mot de passe</label><input id="r-pass" type="password" placeholder="6 caractères minimum"/>
+    <button class="btn" id="r-btn" onclick="register()">Créer mon compte →</button>
+  </div>
+</div>
+<script>
+function showTab(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.form').forEach(f=>f.classList.remove('active'));el.classList.add('active');document.getElementById('form-'+id).classList.add('active');hide();}
+function show(msg,type){var e=document.getElementById('msg');e.textContent=msg;e.className='msg show '+type;}
+function hide(){var e=document.getElementById('msg');e.className='msg';}
+async function login(){
+  var email=document.getElementById('l-email').value.trim();
+  var pass=document.getElementById('l-pass').value;
+  if(!email||!pass){show('Remplissez tous les champs','err');return;}
+  document.getElementById('l-btn').disabled=true;document.getElementById('l-btn').textContent='Connexion...';
+  try{
+    var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});
+    var d=await r.json();
+    if(d.token){localStorage.setItem('sb-token',d.token);localStorage.setItem('sb-user',JSON.stringify(d.user));window.location.href='/app';}
+    else{show(d.error||'Erreur de connexion','err');}
+  }catch(e){show('Erreur réseau','err');}
+  document.getElementById('l-btn').disabled=false;document.getElementById('l-btn').textContent='Se connecter →';
+}
+async function register(){
+  var nom=document.getElementById('r-nom').value.trim();
+  var email=document.getElementById('r-email').value.trim();
+  var pass=document.getElementById('r-pass').value;
+  if(!nom||!email||!pass){show('Remplissez tous les champs','err');return;}
+  if(pass.length<6){show('Mot de passe minimum 6 caractères','err');return;}
+  document.getElementById('r-btn').disabled=true;document.getElementById('r-btn').textContent='Création...';
+  try{
+    var r=await fetch('/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom,email,password:pass})});
+    var d=await r.json();
+    if(d.token){localStorage.setItem('sb-token',d.token);localStorage.setItem('sb-user',JSON.stringify(d.user));window.location.href='/app';}
+    else{show(d.error||'Erreur création compte','err');}
+  }catch(e){show('Erreur réseau','err');}
+  document.getElementById('r-btn').disabled=false;document.getElementById('r-btn').textContent='Créer mon compte →';
+}
+document.addEventListener('keydown',function(e){if(e.key==='Enter'){var a=document.querySelector('.form.active').id;if(a==='form-login')login();else register();}});
+${error ? `show('Erreur Google: ${error}. Essayez avec email.','err');` : ''}
+if(localStorage.getItem('sb-token'))window.location.href='/app';
+</script>
+</body>
+</html>`);
+});
+
+app.get('/app', (req, res) => {
+  const base = CONFIG.BASE_URL;
+  res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot — Mon espace</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
+.nav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}.logo span{color:#00c875}
+.nav-r{display:flex;align-items:center;gap:10px}
+.u-name{font-size:13px;color:rgba(255,255,255,.55)}
+.btn-out{background:rgba(255,255,255,.08);border:none;border-radius:8px;padding:6px 14px;color:rgba(255,255,255,.55);font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-out:hover{color:#fff;background:rgba(255,255,255,.15)}
+.wrap{max-width:960px;margin:0 auto;padding:32px 20px}
+.page-title{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
+.page-sub{font-size:14px;color:#5a7060;margin-bottom:28px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.card{background:#fff;border-radius:14px;padding:20px;border:1px solid rgba(0,200,117,.1);transition:all .2s}
+.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08);border-color:rgba(0,200,117,.25)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.card-logo{width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0}
+.card-ava{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.card-name{font-size:15px;font-weight:700;color:#0a1a0f;line-height:1.2}
+.card-niche{font-size:12px;color:#5a7060;margin-top:2px;text-transform:capitalize}
+.card-stats{display:flex;gap:6px;margin-bottom:14px}
+.stat{background:#f0f4f1;border-radius:8px;padding:6px 10px;text-align:center;flex:1}
+.stat-val{font-size:16px;font-weight:800;color:#0a1a0f}
+.stat-lbl{font-size:10px;color:#9ab0a0;margin-top:1px}
+.card-btns{display:flex;gap:6px}
+.cb{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;text-align:center;border:none;transition:all .15s;display:block}
+.cb-g{background:#00c875;color:#fff}.cb-g:hover{background:#00a862}
+.cb-o{background:#f0f4f1;color:#0a1a0f}.cb-o:hover{background:#e5e7eb}
+.add-card{border:2px dashed rgba(0,200,117,.3);border-radius:14px;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all .2s;background:#f9fdf9}
+.add-card:hover{border-color:#00c875;background:rgba(0,200,117,.04)}
+.add-ico{font-size:32px}.add-txt{font-size:14px;font-weight:600;color:#5a7060}
+.empty{text-align:center;padding:60px 20px;color:#9ab0a0}
+.empty-ico{font-size:48px;margin-bottom:12px}
+.empty-txt{font-size:15px;font-weight:600;margin-bottom:6px;color:#5a7060}
+.empty-sub{font-size:13px}
+.plan-pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;display:inline-block}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="logo">Sama<span>Bot</span></div>
+  <div class="nav-r">
+    <span class="u-name" id="u-name"></span>
+    <button class="btn-out" onclick="logout()">Déconnexion</button>
+  </div>
+</div>
+<div class="wrap">
+  <div class="page-title">Mes bots 🤖</div>
+  <div class="page-sub" id="page-sub">Chargement...</div>
+  <div class="grid" id="grid"><div class="empty"><div class="empty-ico">⏳</div><div class="empty-txt">Chargement...</div></div></div>
+</div>
+<script>
+var token=localStorage.getItem('sb-token');
+var user=JSON.parse(localStorage.getItem('sb-user')||'{}');
+
+// Récupère token Google depuis URL (après OAuth callback)
+var params=new URLSearchParams(window.location.search);
+if(params.get('token')){
+  token=params.get('token');
+  try{user=JSON.parse(decodeURIComponent(params.get('user')||'{}'));}catch(e){}
+  localStorage.setItem('sb-token',token);
+  localStorage.setItem('sb-user',JSON.stringify(user));
+  window.history.replaceState({},'','/app');
+}
+
+if(!token){window.location.href='/login';}
+document.getElementById('u-name').textContent=user.nom||user.email||'';
+
+async function loadBots(){
+  try{
+    var r=await fetch('/auth/my-bots',{headers:{'Authorization':'Bearer '+token}});
+    if(r.status===401){logout();return;}
+    var bots=await r.json();
+    var grid=document.getElementById('grid');
+    document.getElementById('page-sub').innerHTML='<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
+    var html='';
+    if(bots.length){
+      bots.forEach(function(b){
+        var logo=b.logo_url?'<img class="card-logo" src="'+b.logo_url+'" alt="'+b.nom+'"/>':'<div class="card-ava" style="background:'+b.couleur+'">'+b.emoji+'</div>';
+        html+='<div class="card">'
+          +'<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
+          +'<div class="card-btns">'
+          +'<a class="cb cb-o" href="/chat/'+b.id+'" target="_blank">💬 Chat</a>'
+          +'<a class="cb cb-g" href="/dashboard/'+b.id+'">📊 Dashboard</a>'
+          +'</div></div>';
+      });
+    }else{
+      html='<div class="empty"><div class="empty-ico">🤖</div><div class="empty-txt">Pas encore de bot</div><div class="empty-sub">Créez votre premier assistant IA</div></div>';
+    }
+    html+='<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
+    grid.innerHTML=html;
+  }catch(e){document.getElementById('grid').innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur de chargement</div></div>';}
+}
+
+function logout(){localStorage.removeItem('sb-token');localStorage.removeItem('sb-user');window.location.href='/login';}
+loadBots();
+</script>
+</body>
+</html>`);
 });
 
 app.get('/webhook', (req,res) => {
@@ -2617,16 +3891,19 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'6.0', status:'active',
-  features:['rendez-vous-calendrier','geolocalisation-gps','reverse-geocoding','upload-images-supabase','vocal-whisper-wolof','paiement-wave-om','logo-client','catalogue-photos','dashboard-6tabs','avis-clients','qr-code','commandes','widget-universel']
+  app:'🤖 SamaBot IA', version:'8.0', status:'active',
+  features:['multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
 app.get('/privacy', (req,res) => res.send('<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px"><h1 style="color:#00c875">Politique de confidentialité — SamaBot</h1><p style="margin-top:16px;line-height:1.7">SamaBot collecte uniquement les messages nécessaires au fonctionnement du chatbot. Contact: gakououssou@gmail.com</p></body></html>'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🤖 SamaBot v6.0 — port ${PORT}`);
-  console.log(`📅 RDV: système complet activé`);
+  console.log(`🤖 SamaBot v8.0 — port ${PORT}`);
+  console.log(`🌍 Multi-langue: FR / EN / PT`);
+  console.log(`👑 Admin: ${CONFIG.BASE_URL}/admin?secret=***`);
+  console.log(`🚚 Livraison: activé`);
+  console.log(`🔐 Auth: Google + email/password`);
   console.log(`📍 Géoloc: activée (Nominatim)`);
   console.log(`📸 Storage: ${STORAGE_URL}/object/public/${BUCKET}/`);
   console.log(`🎤 Whisper: activé`);
