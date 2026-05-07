@@ -1,13 +1,12 @@
 const express = require('express');
 const app = express();
 app.use(express.json());
-app.use(express.static('public'));
 
-// CORS pour permettre les requêtes depuis n'importe quel site
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -16,97 +15,61 @@ app.use((req, res, next) => {
 // CONFIG
 // ============================================
 const CONFIG = {
-  META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN || 'botsen_verify_2025',
-  META_ACCESS_TOKEN: process.env.META_ACCESS_TOKEN,
-  OPENAI_API_KEY:    process.env.OPENAI_API_KEY,
-  WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
+  OPENAI_API_KEY:      process.env.OPENAI_API_KEY,
+  SUPABASE_URL:        process.env.SUPABASE_URL || 'https://qymbvpevaobeadslmjah.supabase.co',
+  SUPABASE_ANON_KEY:   process.env.SUPABASE_ANON_KEY,
+  SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY,
+  META_VERIFY_TOKEN:   process.env.META_VERIFY_TOKEN || 'samabot_verify_2025',
+  META_ACCESS_TOKEN:   process.env.META_ACCESS_TOKEN,
 };
 
 // ============================================
-// BASE DE DONNÉES DES BOTS (en mémoire pour MVP)
-// En production → utilise Supabase
+// SUPABASE CLIENT
 // ============================================
-const BOTS_DB = {
-  'restaurant-teranga': {
-    id: 'restaurant-teranga',
-    nom: 'Restaurant Teranga',
-    niche: 'restaurant',
-    couleur: '#e8531a',
-    emoji: '🍽️',
-    actif: true,
-    prompt: `Tu es le bot IA du Restaurant Teranga à Dakar, Sénégal.
-Tu parles français et wolof naturellement. Détecte la langue du client et réponds dans sa langue.
-Tu es chaleureux, professionnel et efficace. Réponds en 2-3 phrases max.
+async function supabase(table, method = 'GET', data = null, query = '') {
+  const key = CONFIG.SUPABASE_SERVICE_KEY || CONFIG.SUPABASE_ANON_KEY;
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/${table}${query}`;
 
-Informations:
-- Adresse: Dakar Plateau
-- Horaires: Lun-Ven 11h-22h, Weekend 10h-23h
-- Livraison: 500 FCFA, 30-45 min, Dakar et banlieue
-- Paiement: Wave, Orange Money, espèces
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Prefer': method === 'POST' ? 'return=representation' : 'return=representation'
+    }
+  };
 
-Menu:
-- Thiéboudienne: 2 500 FCFA
-- Yassa poulet: 2 000 FCFA
-- Mafé: 2 200 FCFA
-- Thiébou dieun: 2 800 FCFA
-- Salade Teranga: 1 500 FCFA
+  if (data) opts.body = JSON.stringify(data);
 
-Si le client commande, récapitule et donne le total.`
-  },
-  'salon-fatou': {
-    id: 'salon-fatou',
-    nom: 'Salon Fatou Beauty',
-    niche: 'salon',
-    couleur: '#d4507a',
-    emoji: '💈',
-    actif: true,
-    prompt: `Tu es le bot IA du Salon Fatou Beauty à Dakar, Sénégal.
-Tu parles français et wolof. Tu es accueillant et professionnel. Réponds en 2-3 phrases max.
-
-Informations:
-- Adresse: Almadies, Rue 10
-- Horaires: 9h-20h, 7j/7
-- Paiement: Wave, Orange Money, espèces
-
-Services:
-- Coupe simple: 5 000 FCFA
-- Coiffure complète: 12 000 FCFA
-- Tressage: dès 10 000 FCFA
-- Soin cheveux: 8 000 FCFA
-- Manucure: 3 000 FCFA
-
-Propose toujours de prendre RDV.`
-  },
-  'clinique-sante': {
-    id: 'clinique-sante',
-    nom: 'Clinique Santé Plus',
-    niche: 'clinique',
-    couleur: '#1a6ab1',
-    emoji: '🏥',
-    actif: true,
-    prompt: `Tu es le bot IA de la Clinique Santé Plus à Dakar, Sénégal.
-Tu parles français et wolof. Tu es professionnel et rassurant. Réponds en 2-3 phrases max.
-
-Informations:
-- Adresse: Mermoz, Dakar
-- Consultations: 8h-20h
-- Urgences: 24h/24 — +221 33 xxx xxxx
-
-Services:
-- Médecine générale: 10 000 FCFA
-- Dentiste: 15 000 FCFA
-- Pédiatrie: 12 000 FCFA
-
-IMPORTANT: Pour urgence grave → donne immédiatement le numéro d'urgence.`
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase error: ${err}`);
   }
+
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// Helpers Supabase
+const db = {
+  select: (table, query = '') => supabase(table, 'GET', null, query),
+  insert: (table, data) => supabase(table, 'POST', data),
+  update: (table, data, query) => supabase(table, 'PATCH', data, query),
+  delete: (table, query) => supabase(table, 'DELETE', null, query),
+  upsert: (table, data) => supabase(table, 'POST', data, '?on_conflict=id'),
 };
 
-// Historique des conversations
-const conversations = {};
+// ============================================
+// HISTORIQUE CONVERSATIONS (en mémoire pour la session)
+// Les messages sont aussi sauvés en DB
+// ============================================
+const sessionHistory = {};
 
 function getHistory(sessionId) {
-  if (!conversations[sessionId]) conversations[sessionId] = [];
-  return conversations[sessionId];
+  if (!sessionHistory[sessionId]) sessionHistory[sessionId] = [];
+  return sessionHistory[sessionId];
 }
 
 function addToHistory(sessionId, role, content) {
@@ -116,7 +79,7 @@ function addToHistory(sessionId, role, content) {
 }
 
 // ============================================
-// APPEL OPENAI
+// OPENAI
 // ============================================
 async function callOpenAI(prompt, sessionId, message) {
   addToHistory(sessionId, 'user', message);
@@ -140,651 +103,565 @@ async function callOpenAI(prompt, sessionId, message) {
   });
 
   const data = await response.json();
-  if (!data.choices?.[0]) throw new Error('OpenAI error: ' + JSON.stringify(data));
+  if (!data.choices?.[0]) throw new Error('OpenAI: ' + JSON.stringify(data));
   const reply = data.choices[0].message.content;
   addToHistory(sessionId, 'assistant', reply);
   return reply;
 }
 
 // ============================================
-// API CHAT — Le cœur du système
-// Utilisé par le widget, la page chat, et les apps
+// HELPERS
 // ============================================
-app.post('/chat', async (req, res) => {
-  try {
-    const { message, botId, sessionId, context } = req.body;
+function getNicheEmoji(niche) {
+  const map = { restaurant:'🍽️', salon:'💈', clinique:'🏥', boutique:'🛍️', 'auto-ecole':'🚗', pharmacie:'💊', immobilier:'🏠', default:'🤖' };
+  return map[niche] || map.default;
+}
 
-    if (!message) return res.status(400).json({ error: 'Message requis' });
+function getQuickReplies(niche) {
+  const map = {
+    restaurant: ['🍛 Menu', '📦 Commander', '🛵 Livraison', '🕐 Horaires'],
+    salon: ['📅 RDV', '💅 Services', '💰 Tarifs', '📍 Adresse'],
+    clinique: ['🚨 Urgence', '📅 RDV', '👨‍⚕️ Médecins', '💰 Tarifs'],
+    boutique: ['✨ Nouveautés', '🔥 Promos', '📦 Commander', '🚚 Livraison'],
+    'auto-ecole': ['📝 Inscription', '💰 Tarifs', '📅 Calendrier', '📍 Adresse'],
+    pharmacie: ['💊 Médicament', '🕐 Horaires', '📍 Adresse', '📞 Contact'],
+  };
+  return map[niche] || ['💬 Aide', 'ℹ️ Infos', '📞 Contact'];
+}
 
-    // Trouve le bot
-    let bot = BOTS_DB[botId];
+function generateBotId(nom) {
+  return nom.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '-').substring(0, 30) + '-' + Date.now().toString(36);
+}
 
-    // Si pas de botId, utilise un prompt personnalisé
-    let prompt = bot?.prompt || context || `Tu es un assistant IA professionnel pour un business au Sénégal.
-Tu parles français et wolof. Tu es utile, concis et professionnel.
-Réponds en 2-3 phrases maximum.`;
-
-    const sid = sessionId || botId || 'default';
-    const reply = await callOpenAI(prompt, sid, message);
-
-    res.json({
-      reply,
-      bot: bot ? { nom: bot.nom, emoji: bot.emoji, couleur: bot.couleur } : null
-    });
-
-  } catch (error) {
-    console.error('Chat error:', error);
-    res.status(500).json({ error: 'Erreur serveur', details: error.message });
-  }
-});
-
-// ============================================
-// API ONBOARDING — Créer un nouveau bot
-// ============================================
-app.post('/bot/create', async (req, res) => {
-  try {
-    const { nom, niche, adresse, horaires, services, couleur, email } = req.body;
-
-    if (!nom || !niche) return res.status(400).json({ error: 'Nom et niche requis' });
-
-    // Génère l'ID du bot
-    const id = nom.toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .replace(/\s+/g, '-')
-      .substring(0, 30);
-
-    // Génère le prompt automatiquement
-    const prompt = `Tu es le bot IA de ${nom} à Dakar, Sénégal.
+function generatePrompt(nom, niche, adresse, horaires, services) {
+  return `Tu es le bot IA de ${nom} à Dakar, Sénégal.
 Tu parles français et wolof naturellement. Détecte la langue du client et réponds dans sa langue.
-Tu es professionnel, chaleureux et efficace. Réponds en 2-3 phrases maximum.
+Tu es professionnel, chaleureux et efficace. Réponds toujours en 2-3 phrases maximum.
 
 Informations:
 - Nom: ${nom}
-- Niche: ${niche}
+- Secteur: ${niche}
 ${adresse ? `- Adresse: ${adresse}` : ''}
 ${horaires ? `- Horaires: ${horaires}` : ''}
 ${services ? `- Services/Produits: ${services}` : ''}
 
-Aide les clients avec leurs questions, commandes ou rendez-vous.`;
+Aide les clients avec leurs questions. Si tu ne sais pas, dis-le poliment.`;
+}
 
-    // Sauvegarde le bot
-    BOTS_DB[id] = {
-      id, nom, niche,
+// ============================================
+// API CHAT — Le cœur du système
+// ============================================
+app.post('/chat', async (req, res) => {
+  try {
+    const { message, botId, sessionId } = req.body;
+    if (!message || !botId) return res.status(400).json({ error: 'message et botId requis' });
+
+    // Récupère le bot depuis Supabase
+    const bots = await db.select('bots', `?id=eq.${botId}&actif=eq.true`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+
+    const bot = bots[0];
+    const sid = sessionId || `${botId}_${Date.now()}`;
+
+    // Génère la réponse IA
+    const reply = await callOpenAI(bot.prompt, sid, message);
+
+    // Sauvegarde en DB (async, ne bloque pas la réponse)
+    saveMessage(botId, sid, message, reply).catch(e => console.error('Save error:', e));
+
+    res.json({
+      reply,
+      bot: { nom: bot.nom, emoji: bot.emoji, couleur: bot.couleur }
+    });
+
+  } catch (error) {
+    console.error('Chat error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+async function saveMessage(botId, sessionId, userMsg, botReply) {
+  try {
+    // Trouve ou crée la conversation
+    let convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}`);
+    let convId;
+
+    if (!convs?.length) {
+      const newConv = await db.insert('conversations', {
+        bot_id: botId,
+        session_id: sessionId,
+        canal: 'web',
+        messages_count: 0
+      });
+      convId = newConv?.[0]?.id;
+    } else {
+      convId = convs[0].id;
+      await db.update('conversations', { last_message_at: new Date().toISOString() }, `?id=eq.${convId}`);
+    }
+
+    if (!convId) return;
+
+    // Sauvegarde les messages
+    await db.insert('messages', { conversation_id: convId, bot_id: botId, role: 'user', content: userMsg });
+    await db.insert('messages', { conversation_id: convId, bot_id: botId, role: 'assistant', content: botReply });
+
+    // Incrémente le compteur
+    await db.update('bots', { messages_count: undefined }, `?id=eq.${botId}`);
+
+  } catch (e) {
+    console.error('saveMessage error:', e.message);
+  }
+}
+
+// ============================================
+// API BOT — Infos publiques
+// ============================================
+app.get('/bot/:id', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+
+    const bot = bots[0];
+    res.json({
+      nom: bot.nom,
+      emoji: bot.emoji,
+      couleur: bot.couleur,
+      niche: bot.niche,
+      welcome: `Asalaa maalekum! 👋 Bienvenue chez ${bot.nom}. Comment puis-je vous aider?`,
+      quickReplies: getQuickReplies(bot.niche)
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ============================================
+// API ONBOARDING — Créer un bot
+// ============================================
+app.post('/bot/create', async (req, res) => {
+  try {
+    const { nom, niche, adresse, horaires, services, couleur, email, userId } = req.body;
+    if (!nom || !niche) return res.status(400).json({ error: 'nom et niche requis' });
+
+    const id = generateBotId(nom);
+    const emoji = getNicheEmoji(niche);
+    const prompt = generatePrompt(nom, niche, adresse, horaires, services);
+
+    // Si email fourni → crée ou trouve l'utilisateur
+    let user_id = userId || '00000000-0000-0000-0000-000000000001';
+    if (email && !userId) {
+      const existing = await db.select('users', `?email=eq.${email}`);
+      if (existing?.length) {
+        user_id = existing[0].id;
+      } else {
+        const newUser = await db.insert('users', {
+          email, nom: nom + ' (owner)', plan: 'free'
+        });
+        user_id = newUser?.[0]?.id || user_id;
+      }
+    }
+
+    await db.insert('bots', {
+      id, user_id, nom, niche,
       couleur: couleur || '#00c875',
-      emoji: getNicheEmoji(niche),
-      actif: true,
-      prompt,
-      email: email || null,
-      createdAt: new Date().toISOString()
-    };
+      emoji, prompt, actif: true,
+      adresse: adresse || null,
+      horaires: horaires || null,
+      services: services || null,
+    });
 
-    console.log(`✅ Nouveau bot créé: ${nom} (${id})`);
+    console.log(`✅ Bot créé: ${nom} (${id})`);
 
+    const baseUrl = 'https://botsen-server-production.up.railway.app';
     res.json({
       success: true,
       botId: id,
-      chatUrl: `https://botsen-server-production.up.railway.app/chat/${id}`,
-      widgetCode: generateWidgetCode(id, couleur || '#00c875', nom)
+      chatUrl: `${baseUrl}/chat/${id}`,
+      widgetCode: `<!-- SamaBot Widget — ${nom} -->\n<script>\n  window.SamaBotConfig = { botId: '${id}', couleur: '${couleur || '#00c875'}' };\n</script>\n<script src="${baseUrl}/widget.js" async></script>`
     });
 
   } catch (error) {
     console.error('Create bot error:', error);
-    res.status(500).json({ error: 'Erreur création bot' });
+    res.status(500).json({ error: 'Erreur création: ' + error.message });
   }
 });
 
-function getNicheEmoji(niche) {
-  const emojis = {
-    restaurant: '🍽️', salon: '💈', clinique: '🏥',
-    boutique: '🛍️', 'auto-ecole': '🚗', pharmacie: '💊',
-    immobilier: '🏠', transport: '🚗', default: '🤖'
-  };
-  return emojis[niche] || emojis.default;
-}
+// ============================================
+// API ADMIN — Stats et gestion
+// ============================================
 
-function generateWidgetCode(botId, couleur, nom) {
-  return `<!-- BotSen Widget — ${nom} -->
-<script>
-  window.BotSenConfig = {
-    botId: '${botId}',
-    couleur: '${couleur}'
-  };
-</script>
-<script src="https://botsen-server-production.up.railway.app/widget.js" async></script>`;
-}
+// Stats globales
+app.get('/admin/stats', async (req, res) => {
+  try {
+    const [users, bots, msgs] = await Promise.all([
+      db.select('users', '?select=count'),
+      db.select('bots', '?actif=eq.true&select=count'),
+      db.select('messages', `?created_at=gte.${new Date(Date.now() - 86400000).toISOString()}&select=count`)
+    ]);
+
+    const allBots = await db.select('bots', '?actif=eq.true&select=id,nom,niche,messages_count,couleur,emoji,created_at');
+    const allUsers = await db.select('users', '?select=id,nom,email,plan,actif,created_at&order=created_at.desc');
+    const recentMsgs = await db.select('messages', '?select=content,role,created_at,bot_id&order=created_at.desc&limit=20');
+
+    res.json({
+      stats: {
+        total_users: allUsers?.length || 0,
+        total_bots: allBots?.length || 0,
+        messages_today: recentMsgs?.filter(m => new Date(m.created_at) > new Date(Date.now() - 86400000)).length || 0,
+      },
+      bots: allBots || [],
+      users: allUsers || [],
+      recent_messages: recentMsgs || []
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stats d'un bot spécifique
+app.get('/admin/bot/:id/stats', async (req, res) => {
+  try {
+    const [bot, convs, msgs] = await Promise.all([
+      db.select('bots', `?id=eq.${req.params.id}`),
+      db.select('conversations', `?bot_id=eq.${req.params.id}&order=last_message_at.desc&limit=20`),
+      db.select('messages', `?bot_id=eq.${req.params.id}&order=created_at.desc&limit=50`)
+    ]);
+
+    res.json({
+      bot: bot?.[0] || null,
+      conversations: convs || [],
+      messages: msgs || [],
+      total_conversations: convs?.length || 0,
+      total_messages: msgs?.length || 0
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Liste tous les bots
+app.get('/admin/bots', async (req, res) => {
+  try {
+    const bots = await db.select('bots', '?order=created_at.desc');
+    res.json(bots || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Activer/désactiver un bot
+app.patch('/admin/bot/:id', async (req, res) => {
+  try {
+    await db.update('bots', req.body, `?id=eq.${req.params.id}`);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ============================================
-// WIDGET.JS — Le script universel
-// Le client colle ce script sur son site
+// WIDGET.JS — Script universel
 // ============================================
 app.get('/widget.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
+  const baseUrl = 'https://botsen-server-production.up.railway.app';
+
   res.send(`
 (function() {
-  var config = window.BotSenConfig || {};
-  var botId = config.botId || 'default';
-  var couleur = config.couleur || '#00c875';
-  var apiBase = 'https://botsen-server-production.up.railway.app';
-  var sessionId = 'web_' + Math.random().toString(36).substring(2, 10);
+  var cfg = window.SamaBotConfig || window.BotSenConfig || {};
+  var botId = cfg.botId || cfg.bot_id || 'default';
+  var couleur = cfg.couleur || '#00c875';
+  var base = '${baseUrl}';
+  var sid = 'w_' + Math.random().toString(36).substr(2,9);
   var botInfo = null;
-  var isOpen = false;
+  var open = false;
 
-  // Styles
-  var style = document.createElement('style');
-  style.textContent = \`
-    .bsen-btn { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:\${couleur}; display:flex; align-items:center; justify-content:center; font-size:24px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,0.25); z-index:99999; border:none; transition:transform 0.2s; }
-    .bsen-btn:hover { transform:scale(1.1); }
-    .bsen-notif { position:absolute; top:-2px; right:-2px; width:16px; height:16px; background:#22c55e; border-radius:50%; border:2px solid white; }
-    .bsen-win { position:fixed; bottom:92px; right:24px; width:340px; max-height:480px; background:white; border-radius:18px; box-shadow:0 20px 60px rgba(0,0,0,0.2); z-index:99998; display:none; flex-direction:column; overflow:hidden; font-family:-apple-system,sans-serif; }
-    .bsen-win.open { display:flex; animation:bsenSlide 0.3s ease; }
-    @keyframes bsenSlide { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
-    .bsen-head { background:\${couleur}; padding:14px 16px; display:flex; align-items:center; gap:10px; }
-    .bsen-ava { width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:18px; }
-    .bsen-hname { font-size:14px; font-weight:700; color:white; }
-    .bsen-hstatus { font-size:11px; color:rgba(255,255,255,0.8); margin-top:2px; }
-    .bsen-close { margin-left:auto; background:none; border:none; color:rgba(255,255,255,0.7); cursor:pointer; font-size:18px; padding:2px; }
-    .bsen-msgs { flex:1; padding:12px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; background:#f8f9fa; }
-    .bsen-msg { display:flex; gap:6px; align-items:flex-end; }
-    .bsen-msg.user { flex-direction:row-reverse; }
-    .bsen-bubble { padding:9px 13px; font-size:13px; line-height:1.5; max-width:80%; border-radius:14px; }
-    .bsen-bubble.bot { background:white; color:#1a1a1a; border:1px solid #e5e7eb; border-radius:3px 14px 14px 14px; }
-    .bsen-bubble.user { background:\${couleur}; color:white; border-radius:14px 14px 3px 14px; }
-    .bsen-av { width:26px; height:26px; border-radius:50%; background:\${couleur}; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0; }
-    .bsen-qr { padding:8px 10px; display:flex; flex-wrap:wrap; gap:5px; background:white; border-top:1px solid #e5e7eb; }
-    .bsen-qbtn { padding:4px 10px; border-radius:14px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid; background:rgba(0,0,0,0.03); font-family:inherit; transition:all 0.15s; }
-    .bsen-qbtn:hover { opacity:0.8; }
-    .bsen-inp { padding:10px; display:flex; gap:8px; border-top:1px solid #e5e7eb; background:white; }
-    .bsen-input { flex:1; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:18px; padding:8px 14px; font-size:13px; font-family:inherit; outline:none; }
-    .bsen-input:focus { border-color:\${couleur}; }
-    .bsen-send { width:34px; height:34px; border-radius:50%; background:\${couleur}; border:none; cursor:pointer; color:white; font-size:14px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .bsen-powered { text-align:center; padding:5px; font-size:10px; color:#9ca3af; background:white; border-top:1px solid #f3f4f6; }
-    @media(max-width:480px) { .bsen-win { width:calc(100vw - 32px); right:16px; bottom:88px; } }
-  \`;
-  document.head.appendChild(style);
+  var css = document.createElement('style');
+  css.textContent = '.sb-btn{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:' + couleur + ';display:flex;align-items:center;justify-content:center;font-size:24px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:2147483647;border:none;transition:transform .2s;animation:sbBounce 1s ease 2s both}.sb-btn:hover{transform:scale(1.1)}.sb-notif{position:absolute;top:-2px;right:-2px;width:16px;height:16px;background:#22c55e;border-radius:50%;border:2px solid #fff}.sb-win{position:fixed;bottom:90px;right:24px;width:340px;max-height:480px;background:#fff;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,0.18);z-index:2147483646;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,sans-serif}.sb-win.open{display:flex;animation:sbSlide .3s ease}@keyframes sbSlide{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}@keyframes sbBounce{from{opacity:0;transform:scale(0)}to{opacity:1;transform:scale(1)}}.sb-head{background:' + couleur + ';padding:14px 16px;display:flex;align-items:center;gap:10px}.sb-ava{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:18px}.sb-hn{font-size:14px;font-weight:700;color:#fff}.sb-hs{font-size:11px;color:rgba(255,255,255,.8);margin-top:2px}.sb-x{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:18px;padding:2px}.sb-msgs{flex:1;padding:12px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;background:#f8f9fa}.sb-msg{display:flex;gap:6px;align-items:flex-end}.sb-msg.u{flex-direction:row-reverse}.sb-bub{padding:9px 13px;font-size:13px;line-height:1.5;max-width:80%;border-radius:14px}.sb-bub.b{background:#fff;color:#111;border:1px solid #e5e7eb;border-radius:3px 14px 14px 14px}.sb-bub.u{background:' + couleur + ';color:#fff;border-radius:14px 14px 3px 14px}.sb-av{width:26px;height:26px;border-radius:50%;background:' + couleur + ';display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}.sb-qr{padding:8px 10px;display:flex;flex-wrap:wrap;gap:5px;background:#fff;border-top:1px solid #e5e7eb}.sb-qb{padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ' + couleur + '44;background:' + couleur + '11;color:' + couleur + ';font-family:inherit;transition:all .15s}.sb-qb:hover{background:' + couleur + ';color:#fff}.sb-inp{padding:10px;display:flex;gap:8px;border-top:1px solid #e5e7eb;background:#fff}.sb-input{flex:1;background:#f3f4f6;border:1.5px solid #e5e7eb;border-radius:18px;padding:8px 14px;font-size:13px;font-family:inherit;outline:none}.sb-input:focus{border-color:' + couleur + '}.sb-send{width:34px;height:34px;border-radius:50%;background:' + couleur + ';border:none;cursor:pointer;color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}.sb-pw{text-align:center;padding:5px;font-size:10px;color:#9ca3af;background:#fff;border-top:1px solid #f3f4f6}@media(max-width:480px){.sb-win{width:calc(100vw - 32px);right:16px;bottom:88px}}';
+  document.head.appendChild(css);
 
-  // HTML
   var btn = document.createElement('button');
-  btn.className = 'bsen-btn';
-  btn.innerHTML = '<span id="bsen-icon">💬</span><div class="bsen-notif"></div>';
-  btn.onclick = toggleChat;
+  btn.className = 'sb-btn';
+  btn.innerHTML = '<span id="sb-ico">💬</span><div class="sb-notif" id="sb-notif"></div>';
+  btn.onclick = function() {
+    open = !open;
+    win.classList.toggle('open', open);
+    document.getElementById('sb-notif').style.display = 'none';
+  };
 
   var win = document.createElement('div');
-  win.className = 'bsen-win';
-  win.id = 'bsen-win';
-  win.innerHTML = \`
-    <div class="bsen-head">
-      <div class="bsen-ava" id="bsen-ava">🤖</div>
-      <div>
-        <div class="bsen-hname" id="bsen-hname">Assistant IA</div>
-        <div class="bsen-hstatus">● En ligne — wolof & français</div>
-      </div>
-      <button class="bsen-close" onclick="document.getElementById('bsen-win').classList.remove('open')">✕</button>
-    </div>
-    <div class="bsen-msgs" id="bsen-msgs"></div>
-    <div class="bsen-qr" id="bsen-qr"></div>
-    <div class="bsen-inp">
-      <input class="bsen-input" id="bsen-input" placeholder="Écrivez votre message..." />
-      <button class="bsen-send" onclick="bsenSend()">➤</button>
-    </div>
-    <div class="bsen-powered">Propulsé par <strong style="color:\${couleur}">BotSen AI</strong></div>
-  \`;
+  win.className = 'sb-win';
+  win.innerHTML = '<div class="sb-head"><div class="sb-ava" id="sb-ava">🤖</div><div><div class="sb-hn" id="sb-hn">SamaBot</div><div class="sb-hs">● En ligne — wolof & français</div></div><button class="sb-x" onclick="document.querySelector(\'.sb-win\').classList.remove(\'open\')">✕</button></div><div class="sb-msgs" id="sb-msgs"></div><div class="sb-qr" id="sb-qr"></div><div class="sb-inp"><input class="sb-input" id="sb-inp" placeholder="Écrivez en français ou wolof..."/><button class="sb-send" onclick="sbSend()">➤</button></div><div class="sb-pw">Propulsé par <strong style="color:' + couleur + '">SamaBot IA</strong></div>';
 
   document.body.appendChild(btn);
   document.body.appendChild(win);
 
-  // Charge les infos du bot
-  fetch(apiBase + '/bot/' + botId)
-    .then(r => r.json())
-    .then(data => {
-      if (data.nom) {
-        botInfo = data;
-        document.getElementById('bsen-hname').textContent = data.nom;
-        document.getElementById('bsen-ava').textContent = data.emoji || '🤖';
-        document.getElementById('bsen-icon').textContent = data.emoji || '💬';
-        // Ajoute message de bienvenue
-        addBotMsg(data.welcome || ('Asalaa maalekum! 👋 Bienvenue chez ' + data.nom + '. Comment puis-je vous aider?'));
-        // Ajoute boutons rapides
-        if (data.quickReplies) renderQR(data.quickReplies);
-      }
-    })
-    .catch(() => {
-      addBotMsg('Asalaa maalekum! 👋 Comment puis-je vous aider aujourd\\'hui?');
-    });
+  document.getElementById('sb-inp').onkeydown = function(e) { if(e.key==='Enter') sbSend(); };
 
-  // Entrée clavier
-  document.addEventListener('keydown', function(e) {
-    var input = document.getElementById('bsen-input');
-    if (input && e.key === 'Enter' && document.activeElement === input) bsenSend();
-  });
-
-  function toggleChat() {
-    isOpen = !isOpen;
-    win.classList.toggle('open', isOpen);
-    btn.querySelector('.bsen-notif').style.display = 'none';
-  }
-
-  function addBotMsg(text) {
-    var msgs = document.getElementById('bsen-msgs');
-    var div = document.createElement('div');
-    div.className = 'bsen-msg';
-    var av = document.createElement('div');
-    av.className = 'bsen-av';
-    av.textContent = botInfo?.emoji || '🤖';
-    var bubble = document.createElement('div');
-    bubble.className = 'bsen-bubble bot';
-    bubble.innerHTML = text.replace(/\\n/g, '<br>');
-    div.appendChild(av);
-    div.appendChild(bubble);
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  function addUserMsg(text) {
-    var msgs = document.getElementById('bsen-msgs');
-    var div = document.createElement('div');
-    div.className = 'bsen-msg user';
-    var bubble = document.createElement('div');
-    bubble.className = 'bsen-bubble user';
-    bubble.textContent = text;
-    div.appendChild(bubble);
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  function renderQR(replies) {
-    var qr = document.getElementById('bsen-qr');
-    qr.innerHTML = '';
-    replies.forEach(function(r) {
-      var btn = document.createElement('button');
-      btn.className = 'bsen-qbtn';
-      btn.style.borderColor = couleur + '44';
-      btn.style.color = couleur;
-      btn.textContent = r;
-      btn.onclick = function() { window.bsenSend(r); };
-      qr.appendChild(btn);
-    });
-  }
-
-  window.bsenSend = function(text) {
-    var input = document.getElementById('bsen-input');
-    var msg = text || (input ? input.value.trim() : '');
-    if (!msg) return;
-    if (input) input.value = '';
-    document.getElementById('bsen-qr').innerHTML = '';
-    addUserMsg(msg);
-
-    // Typing indicator
-    var msgs = document.getElementById('bsen-msgs');
-    var typing = document.createElement('div');
-    typing.className = 'bsen-msg';
-    typing.id = 'bsen-typing';
-    typing.innerHTML = '<div class="bsen-av">' + (botInfo?.emoji || '🤖') + '</div><div class="bsen-bubble bot" style="padding:12px 16px"><span style="display:flex;gap:4px"><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:bsenDot 1s infinite"></span><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:bsenDot 1s 0.2s infinite"></span><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:bsenDot 1s 0.4s infinite"></span></span></div>';
-    if (!document.getElementById('bsen-typing-style')) {
-      var s = document.createElement('style');
-      s.id = 'bsen-typing-style';
-      s.textContent = '@keyframes bsenDot{0%,80%,100%{opacity:0.3}40%{opacity:1}}';
-      document.head.appendChild(s);
+  fetch(base + '/bot/' + botId).then(function(r){return r.json();}).then(function(d){
+    if(d.nom){
+      botInfo = d;
+      document.getElementById('sb-hn').textContent = d.nom;
+      document.getElementById('sb-ava').textContent = d.emoji||'🤖';
+      document.getElementById('sb-ico').textContent = d.emoji||'💬';
+      addB(d.welcome||('Asalaa maalekum! 👋 Bienvenue chez '+d.nom+'. Comment puis-je vous aider?'));
+      if(d.quickReplies) renderQR(d.quickReplies);
     }
-    msgs.appendChild(typing);
-    msgs.scrollTop = msgs.scrollHeight;
+  }).catch(function(){addB('Asalaa maalekum! 👋 Comment puis-je vous aider aujourd\\'hui?');});
 
-    fetch(apiBase + '/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, botId: botId, sessionId: sessionId })
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var t = document.getElementById('bsen-typing');
-      if (t) t.remove();
-      addBotMsg(data.reply || 'Désolé, je n\\'ai pas pu répondre.');
-    })
-    .catch(function() {
-      var t = document.getElementById('bsen-typing');
-      if (t) t.remove();
-      addBotMsg('Désolé, une erreur est survenue. Réessayez.');
-    });
+  function addB(t){
+    var m=document.getElementById('sb-msgs');
+    var d=document.createElement('div');d.className='sb-msg';
+    var a=document.createElement('div');a.className='sb-av';a.textContent=botInfo?.emoji||'🤖';
+    var b=document.createElement('div');b.className='sb-bub b';b.innerHTML=t.replace(/\\n/g,'<br>');
+    d.appendChild(a);d.appendChild(b);m.appendChild(d);m.scrollTop=m.scrollHeight;
+  }
+  function addU(t){
+    var m=document.getElementById('sb-msgs');
+    var d=document.createElement('div');d.className='sb-msg u';
+    var b=document.createElement('div');b.className='sb-bub u';b.textContent=t;
+    d.appendChild(b);m.appendChild(d);m.scrollTop=m.scrollHeight;
+  }
+  function renderQR(rs){
+    var qr=document.getElementById('sb-qr');qr.innerHTML='';
+    rs.forEach(function(r){var b=document.createElement('button');b.className='sb-qb';b.textContent=r;b.onclick=function(){sbSend(r);};qr.appendChild(b);});
+  }
+  window.sbSend=function(t){
+    var inp=document.getElementById('sb-inp');
+    var msg=t||(inp?inp.value.trim():'');
+    if(!msg)return;
+    if(inp)inp.value='';
+    document.getElementById('sb-qr').innerHTML='';
+    addU(msg);
+    var m=document.getElementById('sb-msgs');
+    var ty=document.createElement('div');ty.className='sb-msg';ty.id='sb-ty';
+    ty.innerHTML='<div class="sb-av">'+(botInfo?.emoji||'🤖')+'</div><div class="sb-bub b" style="padding:12px 16px"><span style="display:flex;gap:4px"><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:sbD 1s infinite"></span><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:sbD 1s .2s infinite"></span><span style="width:6px;height:6px;border-radius:50%;background:#ccc;animation:sbD 1s .4s infinite"></span></span></div>';
+    if(!document.getElementById('sb-d-css')){var s=document.createElement('style');s.id='sb-d-css';s.textContent='@keyframes sbD{0%,80%,100%{opacity:.3}40%{opacity:1}}';document.head.appendChild(s);}
+    m.appendChild(ty);m.scrollTop=m.scrollHeight;
+    fetch(base+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,botId:botId,sessionId:sid})})
+    .then(function(r){return r.json();})
+    .then(function(d){var t=document.getElementById('sb-ty');if(t)t.remove();addB(d.reply||'Désolé, erreur.');})
+    .catch(function(){var t=document.getElementById('sb-ty');if(t)t.remove();addB('Désolé, une erreur est survenue.');});
   };
-
-  // Ouvre après 4 secondes si pas encore ouvert
-  setTimeout(function() {
-    if (!isOpen) {
-      btn.style.animation = 'none';
-      btn.style.transform = 'scale(1.15)';
-      setTimeout(function() { btn.style.transform = ''; }, 300);
-    }
-  }, 4000);
 })();
   `);
 });
 
 // ============================================
-// API — Infos d'un bot
+// PAGE CHAT DÉDIÉE
 // ============================================
-app.get('/bot/:id', (req, res) => {
-  const bot = BOTS_DB[req.params.id];
-  if (!bot) return res.status(404).json({ error: 'Bot non trouvé' });
+app.get('/chat/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&actif=eq.true`);
+    const bot = bots?.[0] || { nom: 'SamaBot', couleur: '#00c875', emoji: '🤖', niche: 'default' };
+    const qr = getQuickReplies(bot.niche);
 
-  const quickReplies = {
-    restaurant: ['🍛 Menu', '📦 Commander', '🛵 Livraison', '🕐 Horaires'],
-    salon: ['📅 RDV', '💅 Services', '💰 Tarifs', '📍 Adresse'],
-    clinique: ['🚨 Urgence', '📅 RDV', '👨‍⚕️ Médecins', '💰 Tarifs'],
-    boutique: ['✨ Nouveautés', '🔥 Promos', '📦 Commander', '🚚 Livraison'],
-  };
-
-  res.json({
-    ...bot,
-    welcome: `Asalaa maalekum! 👋 Bienvenue chez ${bot.nom}. Comment puis-je vous aider?`,
-    quickReplies: quickReplies[bot.niche] || ['💬 Aide', 'ℹ️ Infos']
-  });
-});
-
-// ============================================
-// PAGE CHAT DÉDIÉE — Lien à partager
-// ============================================
-app.get('/chat/:botId', (req, res) => {
-  const bot = BOTS_DB[req.params.botId];
-  const nom = bot?.nom || 'Assistant BotSen';
-  const couleur = bot?.couleur || '#00c875';
-  const emoji = bot?.emoji || '🤖';
-
-  res.send(`<!DOCTYPE html>
+    res.send(`<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>${nom} — Chat IA</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>${bot.nom} — SamaBot IA</title>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:-apple-system,'DM Sans',sans-serif; background:#f0f2f0; display:flex; flex-direction:column; height:100vh; max-width:480px; margin:0 auto; }
-.header { background:${couleur}; padding:14px 16px; display:flex; align-items:center; gap:12px; box-shadow:0 2px 8px rgba(0,0,0,0.15); }
-.h-ava { width:42px; height:42px; border-radius:50%; background:rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:22px; }
-.h-name { font-size:16px; font-weight:700; color:white; }
-.h-status { font-size:12px; color:rgba(255,255,255,0.8); margin-top:2px; display:flex; align-items:center; gap:5px; }
-.h-dot { width:6px; height:6px; border-radius:50%; background:#4ade80; animation:pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-.msgs { flex:1; padding:14px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
-.msg { display:flex; gap:8px; align-items:flex-end; }
-.msg.user { flex-direction:row-reverse; }
-.bubble { padding:10px 14px; font-size:14px; line-height:1.5; max-width:80%; border-radius:16px; }
-.bubble.bot { background:white; color:#1a1a1a; border:1px solid #e5e7eb; border-radius:3px 16px 16px 16px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
-.bubble.user { background:${couleur}; color:white; border-radius:16px 16px 3px 16px; }
-.av { width:30px; height:30px; border-radius:50%; background:${couleur}; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
-.qr { padding:8px 12px; display:flex; flex-wrap:wrap; gap:6px; background:white; border-top:1px solid #e5e7eb; }
-.qbtn { padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600; cursor:pointer; border:1.5px solid ${couleur}44; background:${couleur}11; color:${couleur}; font-family:inherit; transition:all 0.15s; }
-.qbtn:hover { background:${couleur}; color:white; }
-.input-row { padding:12px; display:flex; gap:8px; background:white; border-top:1px solid #e5e7eb; }
-.input { flex:1; background:#f3f4f6; border:1.5px solid #e5e7eb; border-radius:24px; padding:10px 18px; font-size:14px; font-family:inherit; outline:none; }
-.input:focus { border-color:${couleur}; }
-.send { width:42px; height:42px; border-radius:50%; background:${couleur}; border:none; cursor:pointer; color:white; font-size:16px; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 4px 12px ${couleur}44; }
-.powered { text-align:center; padding:6px; font-size:11px; color:#9ca3af; background:white; }
-.powered span { color:${couleur}; font-weight:700; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f2f0;display:flex;flex-direction:column;height:100dvh;max-width:480px;margin:0 auto}
+.hd{background:${bot.couleur};padding:14px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.hd-av{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:22px}
+.hd-nm{font-size:16px;font-weight:700;color:#fff}
+.hd-st{font-size:12px;color:rgba(255,255,255,.8);margin-top:2px;display:flex;align-items:center;gap:5px}
+.hd-dot{width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.msgs{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.msg{display:flex;gap:8px;align-items:flex-end}
+.msg.u{flex-direction:row-reverse}
+.bub{padding:10px 14px;font-size:14px;line-height:1.5;max-width:80%;border-radius:16px}
+.bub.b{background:#fff;color:#111;border:1px solid #e5e7eb;border-radius:3px 16px 16px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.bub.u{background:${bot.couleur};color:#fff;border-radius:16px 16px 3px 16px}
+.av{width:30px;height:30px;border-radius:50%;background:${bot.couleur};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.qr{padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;background:#fff;border-top:1px solid #e5e7eb}
+.qb{padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid ${bot.couleur}44;background:${bot.couleur}11;color:${bot.couleur};font-family:inherit;transition:all .15s}
+.qb:hover{background:${bot.couleur};color:#fff}
+.ir{padding:12px;display:flex;gap:8px;background:#fff;border-top:1px solid #e5e7eb}
+.inp{flex:1;background:#f3f4f6;border:1.5px solid #e5e7eb;border-radius:24px;padding:10px 18px;font-size:14px;font-family:inherit;outline:none}
+.inp:focus{border-color:${bot.couleur}}
+.snd{width:42px;height:42px;border-radius:50%;background:${bot.couleur};border:none;cursor:pointer;color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.pw{text-align:center;padding:6px;font-size:11px;color:#9ca3af;background:#fff}
+.pw span{color:${bot.couleur};font-weight:700}
 </style>
 </head>
 <body>
-<div class="header">
-  <div class="h-ava">${emoji}</div>
+<div class="hd">
+  <div class="hd-av">${bot.emoji}</div>
   <div>
-    <div class="h-name">${nom}</div>
-    <div class="h-status"><span class="h-dot"></span> En ligne — wolof & français</div>
+    <div class="hd-nm">${bot.nom}</div>
+    <div class="hd-st"><span class="hd-dot"></span>En ligne — wolof & français</div>
   </div>
 </div>
 <div class="msgs" id="msgs">
   <div class="msg">
-    <div class="av">${emoji}</div>
-    <div class="bubble bot">Asalaa maalekum! 👋 Bienvenue chez ${nom}.<br><br>Comment puis-je vous aider aujourd'hui?</div>
+    <div class="av">${bot.emoji}</div>
+    <div class="bub b">Asalaa maalekum! 👋 Bienvenue chez ${bot.nom}.<br><br>Comment puis-je vous aider aujourd'hui?</div>
   </div>
 </div>
-<div class="qr" id="qr"></div>
-<div class="input-row">
-  <input class="input" id="inp" placeholder="Écrivez en français ou wolof..." />
-  <button class="send" onclick="send()">➤</button>
+<div class="qr" id="qr">
+  ${qr.map(r => `<button class="qb" onclick="send('${r}')">${r}</button>`).join('')}
 </div>
-<div class="powered">Propulsé par <span>BotSen AI</span></div>
-
+<div class="ir">
+  <input class="inp" id="inp" placeholder="Écrivez en français ou wolof..."/>
+  <button class="snd" onclick="send()">➤</button>
+</div>
+<div class="pw">Propulsé par <span>SamaBot IA</span></div>
 <script>
-var botId = '${req.params.botId}';
-var sessionId = 'page_' + Math.random().toString(36).substr(2,8);
-var apiBase = '';
-
-document.getElementById('inp').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') send();
-});
-
-// Charge les boutons rapides
-fetch('/bot/' + botId).then(r => r.json()).then(data => {
-  if (data.quickReplies) renderQR(data.quickReplies);
-}).catch(() => {});
-
-function renderQR(replies) {
-  var qr = document.getElementById('qr');
-  qr.innerHTML = '';
-  replies.forEach(function(r) {
-    var btn = document.createElement('button');
-    btn.className = 'qbtn';
-    btn.textContent = r;
-    btn.onclick = function() { send(r); };
-    qr.appendChild(btn);
-  });
+var sid='p_'+Math.random().toString(36).substr(2,8);
+document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter')send();};
+function addM(t,u){
+  var m=document.getElementById('msgs');
+  var d=document.createElement('div');d.className='msg'+(u?' u':'');
+  var b=document.createElement('div');b.className='bub '+(u?'u':'b');
+  b.innerHTML=u?t:t.replace(/\\n/g,'<br>');
+  if(!u){var a=document.createElement('div');a.className='av';a.textContent='${bot.emoji}';d.appendChild(a);}
+  d.appendChild(b);m.appendChild(d);m.scrollTop=m.scrollHeight;
 }
-
-function addMsg(text, isUser) {
-  var msgs = document.getElementById('msgs');
-  var div = document.createElement('div');
-  div.className = 'msg' + (isUser ? ' user' : '');
-  var bubble = document.createElement('div');
-  bubble.className = 'bubble ' + (isUser ? 'user' : 'bot');
-  bubble.innerHTML = text.replace(/\\n/g, '<br>');
-  if (!isUser) {
-    var av = document.createElement('div');
-    av.className = 'av'; av.textContent = '${emoji}';
-    div.appendChild(av);
-  }
-  div.appendChild(bubble);
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-function send(text) {
-  var inp = document.getElementById('inp');
-  var msg = text || inp.value.trim();
-  if (!msg) return;
-  inp.value = '';
-  document.getElementById('qr').innerHTML = '';
-  addMsg(msg, true);
-
-  fetch('/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: msg, botId: botId, sessionId: sessionId })
-  })
-  .then(r => r.json())
-  .then(data => addMsg(data.reply || 'Désolé, erreur.', false))
-  .catch(() => addMsg('Désolé, une erreur est survenue.', false));
+function send(t){
+  var inp=document.getElementById('inp');
+  var msg=t||(inp.value.trim());if(!msg)return;
+  inp.value='';document.getElementById('qr').innerHTML='';
+  addM(msg,true);
+  fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,botId:'${req.params.botId}',sessionId:sid})})
+  .then(r=>r.json()).then(d=>addM(d.reply||'Désolé, erreur.',false))
+  .catch(()=>addM('Désolé, une erreur est survenue.',false));
 }
 </script>
 </body>
 </html>`);
+  } catch (error) {
+    res.status(500).send('Erreur serveur');
+  }
 });
 
 // ============================================
-// PAGE ONBOARDING — Le client configure son bot
+// PAGE SETUP — Onboarding self-service
 // ============================================
 app.get('/setup', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BotSen — Créer votre bot IA</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot — Créer votre bot IA</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:'DM Sans',sans-serif; background:#f0f4f1; min-height:100vh; display:flex; flex-direction:column; }
-.header { background:#0a1a0f; padding:20px 24px; display:flex; align-items:center; gap:10px; }
-.logo { font-family:'Syne',sans-serif; font-size:22px; font-weight:800; color:white; }
-.logo span { color:#00c875; }
-.container { flex:1; padding:32px 24px; max-width:560px; margin:0 auto; width:100%; }
-h1 { font-family:'Syne',sans-serif; font-size:28px; font-weight:800; color:#0a1a0f; margin-bottom:6px; letter-spacing:-0.5px; }
-.subtitle { font-size:15px; color:#5a7060; margin-bottom:32px; }
-.step { background:white; border-radius:16px; padding:24px; margin-bottom:20px; border:1px solid rgba(0,200,117,0.15); }
-.step-title { font-size:16px; font-weight:700; color:#0a1a0f; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
-.step-num { width:28px; height:28px; border-radius:50%; background:#00c875; color:white; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0; }
-label { font-size:13px; font-weight:600; color:#3a5040; display:block; margin-bottom:6px; }
-input, select, textarea { width:100%; border:1.5px solid #d1e5d8; border-radius:10px; padding:10px 14px; font-size:14px; font-family:'DM Sans',sans-serif; outline:none; transition:border 0.15s; color:#0a1a0f; }
-input:focus, select:focus, textarea:focus { border-color:#00c875; }
-textarea { min-height:100px; resize:vertical; }
-.field { margin-bottom:14px; }
-.niches { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-.niche { border:1.5px solid #d1e5d8; border-radius:10px; padding:12px 8px; text-align:center; cursor:pointer; transition:all 0.15s; }
-.niche:hover { border-color:#00c875; background:#f0faf4; }
-.niche.sel { border-color:#00c875; background:rgba(0,200,117,0.1); }
-.niche-emo { font-size:24px; display:block; margin-bottom:4px; }
-.niche-nm { font-size:12px; font-weight:600; color:#0a1a0f; }
-.colors { display:flex; gap:10px; flex-wrap:wrap; }
-.color-opt { width:36px; height:36px; border-radius:50%; cursor:pointer; border:3px solid transparent; transition:all 0.15s; }
-.color-opt.sel { border-color:#0a1a0f; transform:scale(1.15); }
-.submit-btn { width:100%; background:#00c875; color:white; border:none; border-radius:12px; padding:16px; font-size:16px; font-weight:700; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all 0.2s; margin-top:8px; }
-.submit-btn:hover { background:#00a862; transform:translateY(-1px); }
-.result { background:#0a1a0f; border-radius:16px; padding:24px; display:none; }
-.result.show { display:block; }
-.result-title { font-family:'Syne',sans-serif; font-size:20px; font-weight:800; color:white; margin-bottom:16px; }
-.result-item { margin-bottom:14px; }
-.result-lbl { font-size:12px; color:rgba(255,255,255,0.5); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
-.result-val { background:rgba(255,255,255,0.08); border-radius:8px; padding:10px 14px; font-size:13px; color:white; word-break:break-all; }
-.copy-btn { background:rgba(0,200,117,0.15); color:#00c875; border:1px solid rgba(0,200,117,0.3); border-radius:6px; padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer; font-family:'DM Sans',sans-serif; margin-top:6px; transition:all 0.15s; }
-.copy-btn:hover { background:rgba(0,200,117,0.25); }
-.test-btn { display:block; background:#00c875; color:white; text-decoration:none; border-radius:10px; padding:12px 20px; font-size:14px; font-weight:700; text-align:center; margin-top:16px; transition:all 0.15s; }
-.test-btn:hover { background:#00a862; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
+.hd{background:#0a1a0f;padding:18px 24px;display:flex;align-items:center;gap:10px}
+.logo{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#fff}
+.logo span{color:#00c875}
+.wrap{max-width:560px;margin:0 auto;padding:28px 20px}
+h1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
+.sub{font-size:14px;color:#5a7060;margin-bottom:28px}
+.card{background:#fff;border-radius:16px;padding:22px;margin-bottom:18px;border:1px solid rgba(0,200,117,.15)}
+.ctitle{font-size:15px;font-weight:700;color:#0a1a0f;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.num{width:26px;height:26px;border-radius:50%;background:#00c875;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+label{font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:5px}
+input,select,textarea{width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:'DM Sans',sans-serif;outline:none;color:#0a1a0f;transition:border .15s}
+input:focus,select:focus,textarea:focus{border-color:#00c875}
+textarea{min-height:90px;resize:vertical}
+.f{margin-bottom:12px}
+.niches{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.n{border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 6px;text-align:center;cursor:pointer;transition:all .15s}
+.n:hover{border-color:#00c875;background:#f0faf4}
+.n.s{border-color:#00c875;background:rgba(0,200,117,.1)}
+.ne{font-size:22px;display:block;margin-bottom:3px}
+.nn{font-size:11px;font-weight:600;color:#0a1a0f}
+.cols{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.co{width:34px;height:34px;border-radius:50%;cursor:pointer;border:3px solid transparent;transition:all .15s}
+.co.s{border-color:#0a1a0f;transform:scale(1.15)}
+.sbtn{width:100%;background:#00c875;color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;margin-top:6px}
+.sbtn:hover{background:#00a862}
+.sbtn:disabled{opacity:.6;cursor:not-allowed}
+.res{background:#0a1a0f;border-radius:16px;padding:22px;display:none}
+.res.show{display:block}
+.rt{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff;margin-bottom:16px}
+.rl{font-size:11px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
+.rv{background:rgba(255,255,255,.07);border-radius:8px;padding:10px 12px;font-size:12px;color:#fff;word-break:break-all;line-height:1.6}
+.cp{background:rgba(0,200,117,.15);color:#00c875;border:1px solid rgba(0,200,117,.3);border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;margin-top:6px}
+.tb{display:block;background:#00c875;color:#fff;text-decoration:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;text-align:center;margin-top:14px}
+.ri{margin-bottom:12px}
 </style>
 </head>
 <body>
-<div class="header">
-  <div class="logo">Bot<span>Sen</span></div>
-</div>
-<div class="container">
+<div class="hd"><div class="logo">Sama<span>Bot</span></div></div>
+<div class="wrap">
   <h1>Créez votre bot IA</h1>
-  <p class="subtitle">Configurez votre assistant en 2 minutes. Sans technique, sans code.</p>
+  <p class="sub">Configurez votre assistant en 2 minutes. Sans technique.</p>
 
-  <div class="step">
-    <div class="step-title"><span class="step-num">1</span> Votre business</div>
-    <div class="field"><label>Nom de votre business *</label><input id="nom" placeholder="Ex: Restaurant Teranga, Salon Fatou..." /></div>
-    <div class="field">
+  <div class="card">
+    <div class="ctitle"><span class="num">1</span> Votre business</div>
+    <div class="f"><label>Nom du business *</label><input id="nom" placeholder="Ex: Restaurant Teranga, Salon Aminata..."/></div>
+    <div class="f">
       <label>Type de business *</label>
       <div class="niches" id="niches">
-        <div class="niche sel" data-val="restaurant" onclick="selNiche(this)"><span class="niche-emo">🍽️</span><div class="niche-nm">Restaurant</div></div>
-        <div class="niche" data-val="salon" onclick="selNiche(this)"><span class="niche-emo">💈</span><div class="niche-nm">Salon beauté</div></div>
-        <div class="niche" data-val="clinique" onclick="selNiche(this)"><span class="niche-emo">🏥</span><div class="niche-nm">Clinique</div></div>
-        <div class="niche" data-val="boutique" onclick="selNiche(this)"><span class="niche-emo">🛍️</span><div class="niche-nm">Boutique</div></div>
-        <div class="niche" data-val="auto-ecole" onclick="selNiche(this)"><span class="niche-emo">🚗</span><div class="niche-nm">Auto-école</div></div>
-        <div class="niche" data-val="autre" onclick="selNiche(this)"><span class="niche-emo">🏢</span><div class="niche-nm">Autre</div></div>
+        <div class="n s" data-val="restaurant" onclick="selN(this)"><span class="ne">🍽️</span><div class="nn">Restaurant</div></div>
+        <div class="n" data-val="salon" onclick="selN(this)"><span class="ne">💈</span><div class="nn">Salon beauté</div></div>
+        <div class="n" data-val="clinique" onclick="selN(this)"><span class="ne">🏥</span><div class="nn">Clinique</div></div>
+        <div class="n" data-val="boutique" onclick="selN(this)"><span class="ne">🛍️</span><div class="nn">Boutique</div></div>
+        <div class="n" data-val="auto-ecole" onclick="selN(this)"><span class="ne">🚗</span><div class="nn">Auto-école</div></div>
+        <div class="n" data-val="autre" onclick="selN(this)"><span class="ne">🏢</span><div class="nn">Autre</div></div>
       </div>
     </div>
   </div>
 
-  <div class="step">
-    <div class="step-title"><span class="step-num">2</span> Informations du bot</div>
-    <div class="field"><label>Adresse</label><input id="adresse" placeholder="Ex: Dakar Plateau, Almadies..." /></div>
-    <div class="field"><label>Horaires</label><input id="horaires" placeholder="Ex: Lun-Ven 9h-18h, Weekend 10h-16h" /></div>
-    <div class="field"><label>Services / Menu / Produits</label><textarea id="services" placeholder="Ex: Thiéboudienne 2500F, Yassa 2000F...&#10;Ou: Coupe 5000F, Tressage 10000F..."></textarea></div>
+  <div class="card">
+    <div class="ctitle"><span class="num">2</span> Informations</div>
+    <div class="f"><label>Adresse</label><input id="adr" placeholder="Ex: Dakar Plateau, Almadies..."/></div>
+    <div class="f"><label>Horaires</label><input id="hor" placeholder="Ex: Lun-Ven 9h-18h, Weekend 10h-16h"/></div>
+    <div class="f"><label>Services / Menu / Produits</label><textarea id="srv" placeholder="Ex: Thiéboudienne 2500F, Yassa 2000F..."></textarea></div>
   </div>
 
-  <div class="step">
-    <div class="step-title"><span class="step-num">3</span> Apparence du bot</div>
-    <label>Couleur principale</label>
-    <div class="colors" id="colors">
-      <div class="color-opt sel" data-val="#00c875" style="background:#00c875" onclick="selColor(this)"></div>
-      <div class="color-opt" data-val="#e8531a" style="background:#e8531a" onclick="selColor(this)"></div>
-      <div class="color-opt" data-val="#d4507a" style="background:#d4507a" onclick="selColor(this)"></div>
-      <div class="color-opt" data-val="#1a6ab1" style="background:#1a6ab1" onclick="selColor(this)"></div>
-      <div class="color-opt" data-val="#7c3aed" style="background:#7c3aed" onclick="selColor(this)"></div>
-      <div class="color-opt" data-val="#0d9488" style="background:#0d9488" onclick="selColor(this)"></div>
+  <div class="card">
+    <div class="ctitle"><span class="num">3</span> Couleur du bot</div>
+    <div class="cols" id="cols">
+      <div class="co s" data-val="#00c875" style="background:#00c875" onclick="selC(this)"></div>
+      <div class="co" data-val="#e8531a" style="background:#e8531a" onclick="selC(this)"></div>
+      <div class="co" data-val="#d4507a" style="background:#d4507a" onclick="selC(this)"></div>
+      <div class="co" data-val="#1a6ab1" style="background:#1a6ab1" onclick="selC(this)"></div>
+      <div class="co" data-val="#7c3aed" style="background:#7c3aed" onclick="selC(this)"></div>
+      <div class="co" data-val="#0d9488" style="background:#0d9488" onclick="selC(this)"></div>
     </div>
   </div>
 
-  <div class="field"><label style="font-size:13px;color:#5a7060">Email (pour recevoir les notifications)</label><input id="email" type="email" placeholder="votre@email.com" /></div>
+  <div class="f"><label style="font-size:13px;color:#5a7060">Email (notifications)</label><input id="eml" type="email" placeholder="votre@email.com"/></div>
 
-  <button class="submit-btn" onclick="createBot()">🚀 Créer mon bot maintenant</button>
+  <button class="sbtn" id="sbtn" onclick="create()">🚀 Créer mon bot SamaBot</button>
 
-  <div class="result" id="result">
-    <div class="result-title">🎉 Votre bot est prêt!</div>
-    <div class="result-item">
-      <div class="result-lbl">Lien de chat à partager</div>
-      <div class="result-val" id="r-chat"></div>
-      <button class="copy-btn" onclick="copy('r-chat')">Copier le lien</button>
-    </div>
-    <div class="result-item">
-      <div class="result-lbl">Code widget pour votre site</div>
-      <div class="result-val" id="r-widget" style="font-size:11px;line-height:1.6"></div>
-      <button class="copy-btn" onclick="copy('r-widget')">Copier le code</button>
-    </div>
-    <a class="test-btn" id="r-link" href="#" target="_blank">💬 Tester mon bot →</a>
+  <div class="res" id="res">
+    <div class="rt">🎉 Votre bot est prêt!</div>
+    <div class="ri"><div class="rl">Lien de chat à partager</div><div class="rv" id="r-chat"></div><button class="cp" onclick="cp('r-chat')">📋 Copier le lien</button></div>
+    <div class="ri"><div class="rl">Code widget (coller sur votre site)</div><div class="rv" id="r-widget"></div><button class="cp" onclick="cp('r-widget')">📋 Copier le code</button></div>
+    <a class="tb" id="r-link" href="#" target="_blank">💬 Tester mon bot maintenant →</a>
   </div>
 </div>
-
 <script>
-var selNicheVal = 'restaurant';
-var selColorVal = '#00c875';
-
-function selNiche(el) {
-  document.querySelectorAll('.niche').forEach(n => n.classList.remove('sel'));
-  el.classList.add('sel');
-  selNicheVal = el.dataset.val;
-}
-
-function selColor(el) {
-  document.querySelectorAll('.color-opt').forEach(c => c.classList.remove('sel'));
-  el.classList.add('sel');
-  selColorVal = el.dataset.val;
-}
-
-function copy(id) {
-  var text = document.getElementById(id).textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    alert('Copié!');
-  });
-}
-
-async function createBot() {
-  var nom = document.getElementById('nom').value.trim();
-  if (!nom) { alert('Entrez le nom de votre business'); return; }
-
-  var btn = document.querySelector('.submit-btn');
-  btn.textContent = '⏳ Création en cours...';
-  btn.disabled = true;
-
-  try {
-    var res = await fetch('/bot/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nom: nom,
-        niche: selNicheVal,
-        adresse: document.getElementById('adresse').value,
-        horaires: document.getElementById('horaires').value,
-        services: document.getElementById('services').value,
-        couleur: selColorVal,
-        email: document.getElementById('email').value
-      })
-    });
-
-    var data = await res.json();
-
-    if (data.success) {
-      document.getElementById('r-chat').textContent = data.chatUrl;
-      document.getElementById('r-widget').textContent = data.widgetCode;
-      document.getElementById('r-link').href = data.chatUrl;
-      document.getElementById('result').classList.add('show');
-      document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
-    } else {
-      alert('Erreur: ' + (data.error || 'Réessayez'));
-    }
-  } catch(e) {
-    alert('Erreur réseau. Réessayez.');
-  }
-
-  btn.textContent = '🚀 Créer mon bot maintenant';
-  btn.disabled = false;
+var nv='restaurant', cv='#00c875';
+function selN(e){document.querySelectorAll('.n').forEach(x=>x.classList.remove('s'));e.classList.add('s');nv=e.dataset.val;}
+function selC(e){document.querySelectorAll('.co').forEach(x=>x.classList.remove('s'));e.classList.add('s');cv=e.dataset.val;}
+function cp(id){navigator.clipboard.writeText(document.getElementById(id).textContent).then(()=>alert('Copié! ✅'));}
+async function create(){
+  var nom=document.getElementById('nom').value.trim();
+  if(!nom){alert('Entrez le nom de votre business');return;}
+  var btn=document.getElementById('sbtn');
+  btn.textContent='⏳ Création...';btn.disabled=true;
+  try{
+    var r=await fetch('/bot/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom,niche:nv,adresse:document.getElementById('adr').value,horaires:document.getElementById('hor').value,services:document.getElementById('srv').value,couleur:cv,email:document.getElementById('eml').value})});
+    var d=await r.json();
+    if(d.success){
+      document.getElementById('r-chat').textContent=d.chatUrl;
+      document.getElementById('r-widget').textContent=d.widgetCode;
+      document.getElementById('r-link').href=d.chatUrl;
+      var res=document.getElementById('res');res.classList.add('show');res.scrollIntoView({behavior:'smooth'});
+    }else{alert('Erreur: '+(d.error||'Réessayez'));}
+  }catch(e){alert('Erreur réseau');}
+  btn.textContent='🚀 Créer mon bot SamaBot';btn.disabled=false;
 }
 </script>
 </body>
@@ -792,14 +669,11 @@ async function createBot() {
 });
 
 // ============================================
-// WEBHOOK META (conservé)
+// WEBHOOK META
 // ============================================
 app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && token === CONFIG.META_VERIFY_TOKEN) {
-    res.status(200).send(challenge);
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === CONFIG.META_VERIFY_TOKEN) {
+    res.status(200).send(req.query['hub.challenge']);
   } else {
     res.sendStatus(403);
   }
@@ -810,44 +684,38 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
     if (body.object === 'instagram' || body.object === 'page') {
-      const entry = body.entry?.[0];
-      const messaging = entry?.messaging?.[0];
+      const messaging = body.entry?.[0]?.messaging?.[0];
       if (messaging?.message?.text) {
         const senderId = messaging.sender.id;
         const message = messaging.message.text;
         console.log(`📩 Instagram de ${senderId}: ${message}`);
-        const bot = BOTS_DB['restaurant-teranga'];
-        const reply = await callOpenAI(bot.prompt, senderId, message);
-        console.log(`✅ Réponse: ${reply}`);
-        // Envoyer la réponse...
       }
     }
-  } catch (error) {
-    console.error('❌ Webhook error:', error);
-  }
+  } catch (e) { console.error('Webhook error:', e); }
 });
 
 // ============================================
-// ROUTES UTILES
+// STATUS & PRIVACY
 // ============================================
 app.get('/', (req, res) => {
   res.json({
-    status: '🚀 BotSen API active',
+    app: '🤖 SamaBot IA',
     version: '2.0',
-    bots: Object.keys(BOTS_DB).length,
+    status: 'active',
     endpoints: {
       chat: 'POST /chat',
       widget: 'GET /widget.js',
       setup: 'GET /setup',
       chatPage: 'GET /chat/:botId',
       createBot: 'POST /bot/create',
-      botInfo: 'GET /bot/:id'
+      botInfo: 'GET /bot/:id',
+      adminStats: 'GET /admin/stats'
     }
   });
 });
 
 app.get('/privacy', (req, res) => {
-  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Politique de confidentialité — BotSen</title><style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}h1{color:#00c875}</style></head><body><h1>Politique de confidentialité — BotSen</h1><p>BotSen collecte uniquement les messages nécessaires au fonctionnement du chatbot. Les données ne sont pas partagées avec des tiers sauf OpenAI. Contact: gakououssou@gmail.com</p></body></html>`);
+  res.send('<h1 style="font-family:sans-serif;color:#00c875">SamaBot — Politique de confidentialité</h1><p style="font-family:sans-serif;max-width:600px;margin:20px auto">SamaBot collecte uniquement les messages nécessaires au fonctionnement du chatbot. Les données ne sont jamais partagées avec des tiers sauf OpenAI pour la génération de réponses. Contact: gakououssou@gmail.com</p>');
 });
 
 // ============================================
@@ -855,8 +723,7 @@ app.get('/privacy', (req, res) => {
 // ============================================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 BotSen v2.0 démarré sur port ${PORT}`);
-  console.log(`📡 Setup: https://botsen-server-production.up.railway.app/setup`);
-  console.log(`💬 Widget: https://botsen-server-production.up.railway.app/widget.js`);
-  console.log(`🤖 Bots: ${Object.keys(BOTS_DB).length}`);
+  console.log(`🤖 SamaBot v2.0 démarré sur port ${PORT}`);
+  console.log(`🗄️  Supabase: ${CONFIG.SUPABASE_URL}`);
+  console.log(`🔧 Setup: https://botsen-server-production.up.railway.app/setup`);
 });
