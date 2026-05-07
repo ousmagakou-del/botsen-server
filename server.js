@@ -122,7 +122,7 @@ async function callOpenAI(botConfig, userId, userMessage) {
 }
 
 async function sendInstagramMessage(recipientId, message) {
-  const url = `https://graph.facebook.com/v18.0/me/messages`;
+ const url = `https://graph.facebook.com/v18.0/17841401097932148/messages`;
   console.log(`📤 Envoi Instagram à ${recipientId}`);
   console.log(`🔑 Token: ${CONFIG.META_ACCESS_TOKEN ? CONFIG.META_ACCESS_TOKEN.substring(0,20) + '...' : 'MANQUANT!'}`);
 
