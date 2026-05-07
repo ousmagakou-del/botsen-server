@@ -269,9 +269,52 @@ app.get('/bots', (req, res) => {
 });
 
 // ============================================
+// POLITIQUE DE CONFIDENTIALITÉ
+// ============================================
+app.get('/privacy', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Politique de confidentialité — BotSen</title>
+      <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+        h1 { color: #00c875; }
+        h2 { margin-top: 30px; }
+      </style>
+    </head>
+    <body>
+      <h1>Politique de confidentialité — BotSen</h1>
+      <p>Dernière mise à jour : Mai 2025</p>
+
+      <h2>1. Collecte des données</h2>
+      <p>BotSen collecte uniquement les messages nécessaires au fonctionnement du chatbot. Les données collectées incluent les messages envoyés par les utilisateurs via Instagram, WhatsApp et Facebook Messenger.</p>
+
+      <h2>2. Utilisation des données</h2>
+      <p>Les données sont utilisées exclusivement pour générer des réponses automatiques via notre service de chatbot. Elles ne sont pas utilisées à des fins publicitaires.</p>
+
+      <h2>3. Partage des données</h2>
+      <p>Les données ne sont pas partagées avec des tiers, à l'exception des services nécessaires au fonctionnement du bot (OpenAI pour la génération de réponses).</p>
+
+      <h2>4. Conservation des données</h2>
+      <p>Les conversations sont conservées temporairement en mémoire et supprimées automatiquement après chaque session.</p>
+
+      <h2>5. Vos droits</h2>
+      <p>Vous pouvez demander la suppression de vos données à tout moment en nous contactant.</p>
+
+      <h2>6. Contact</h2>
+      <p>Pour toute question : <a href="mailto:gakououssou@gmail.com">gakououssou@gmail.com</a></p>
+    </body>
+    </html>
+  `);
+});
+
+// ============================================
 // DÉMARRAGE
 // ============================================
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 BotSen démarré sur port ${PORT}`);
   console.log(`📡 Webhook: https://TON-APP.railway.app/webhook`);
