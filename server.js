@@ -2549,7 +2549,7 @@ async function loadWorkflows(){
     el.innerHTML=wfs.map(w=>'<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f4f1">'
       +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#0a1a0f">'+w.nom+'</div>'
       +'<div style="font-size:11px;color:#9ab0a0;margin-top:2px">'+w.trigger_type+(w.trigger_valeur?' → "'+w.trigger_valeur+'"':'')+'</div>'
-      +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'...</div></div>'
+      +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'\u2026</div></div>'
       +'<div style="display:flex;gap:6px">'
       +'<button onclick="toggleWf(\''+w.id+'\','+w.actif+')" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
       +'</div></div>').join('');
