@@ -2961,7 +2961,7 @@ function tPay(e){e.classList.toggle('s');payOpts=Array.from(document.querySelect
 
 function addItem(){
   var d=document.createElement('div');d.className='cat-item';
-  d.innerHTML='<div class="cat-item-row"><input placeholder="Nom de l\'article *" class="cat-nom"/><input placeholder="Prix F" class="cat-prix" type="number" min="0"/><button class="rm" onclick="this.closest(\\'.cat-item\\').remove()">✕</button></div><input placeholder="Description (optionnel)" class="cat-desc" style="font-size:13px"/><div class="cat-item-img"><img class="cat-img-preview" alt=""/><div class="cat-img-btn">📷 Photo<input type="file" accept="image/*" onchange="uploadCatImg(this)"/></div><span style="font-size:11px;color:#9ab0a0;margin-left:4px">Optionnel</span></div>';
+  d.innerHTML='<div class="cat-item-row"><input placeholder="Nom de larticle *" class="cat-nom"/><input placeholder="Prix F" class="cat-prix" type="number" min="0"/><button class="rm" onclick="this.closest(&#39;.cat-item&#39;).remove()">✕</button></div><input placeholder="Description (optionnel)" class="cat-desc" style="font-size:13px"/><div class="cat-item-img"><img class="cat-img-preview" alt=""/><div class="cat-img-btn">📷 Photo<input type="file" accept="image/*" onchange="uploadCatImg(this)"/></div><span style="font-size:11px;color:#9ab0a0;margin-left:4px">Optionnel</span></div>';
   document.getElementById('cat-items').appendChild(d);
 }
 
@@ -3808,7 +3808,7 @@ function renderCat(items){
   items.forEach(function(item){
     var c=document.createElement('div');c.className='cat-card';
     var imgHtml=item.image
-      ?'<img src="'+item.image+'" class="cat-img" alt="'+item.nom+'" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'"/><div class="cat-img-placeholder" style="display:none">'+(item.emoji||'🛍️')+'</div>'
+      ?'<img src="'+item.image+'" class="cat-img" alt="'+item.nom+'" onerror="this.style.display=&#39;none&#39;;this.nextSibling.style.display=&#39;flex&#39;"/><div class="cat-img-placeholder" style="display:none">'+(item.emoji||'🛍️')+'</div>'
       :'<div class="cat-img-placeholder">'+(item.emoji||'🛍️')+'</div>';
     var descHtml=item.desc?'<span class="cat-desc-small">'+item.desc+'</span>':'';
     c.innerHTML=imgHtml
