@@ -937,7 +937,7 @@ textarea.b-msg:focus{border-color:#00c875}
 </div>
 
 <script>
-var botId = '${bot.id}';
+var botId = "${bot.id}";
 var currentConvId = null;
 
 async function loadConv(convId, sessionId, el) {
@@ -2449,7 +2449,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div>
           <div style="font-size:12px;font-weight:600;color:#5a7060;margin-bottom:3px">Widget site web</div>
-          <div class="copy-area" id="wcode-inline">&lt;script&gt;window.SamaBotConfig={botId:'${bot.id}',couleur:'${bot.couleur}'}&lt;/script&gt;&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
+          <div class="copy-area" id="wcode-inline">&lt;script&gt;window.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"}&lt;/script&gt;&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
           <button class="cp" onclick="copyWidget()">📋 Copier widget</button>
         </div>
       </div>
@@ -2495,7 +2495,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 <div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:#fff;border-radius:16px;padding:22px;max-width:480px;width:100%">
     <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:14px">📋 Code widget</div>
-    <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId: '${bot.id}', couleur: '${bot.couleur}' };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
+    <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId: "${bot.id}", couleur: "${bot.couleur}" };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
     <button class="cp" onclick="copyWidget()">📋 Copier</button>
     <button onclick="document.getElementById('wm').style.display='none'" style="margin-left:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a7060">Fermer</button>
   </div>
@@ -2512,7 +2512,7 @@ async function importCatalogue(){
   btn.disabled=true;btn.textContent='⏳ Import en cours...';
   res.style.display='none';
   try{
-    var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',url,type,apiKey:key||undefined})});
+    var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:"${bot.id}",url,type,apiKey:key||undefined})});
     var d=await r.json();
     if(d.success){
       res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';
@@ -2526,7 +2526,7 @@ async function importCatalogue(){
   btn.disabled=false;btn.textContent='🔄 Importer le catalogue';
 }
 
-function changeLang(l){window.location.href='/dashboard/${bot.id}?lang='+l;}
+function changeLang(l){window.location.href="/dashboard/${bot.id}?lang="+l;}
 
 // WORKFLOWS
 function toggleWfVal(){
@@ -2537,7 +2537,7 @@ toggleWfVal();
 
 async function loadWorkflows(){
   try{
-    var r=await fetch('/workflow/${bot.id}');
+    var r=await fetch("/workflow/${bot.id}");
     var wfs=await r.json();
     var el=document.getElementById('wf-list');
     if(!wfs.length){el.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:13px;padding:20px">Aucun workflow. Créez le premier!</div>';return;}
@@ -2559,7 +2559,7 @@ async function saveWorkflow(){
   var res=document.getElementById('wf-result');
   if(!nom||!rep){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
   try{
-    var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',nom,trigger,valeur:val,reponse:rep})});
+    var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:"${bot.id}",nom,trigger,valeur:val,reponse:rep})});
     var d=await r.json();
     if(d.success){res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
     else{res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
@@ -2574,7 +2574,7 @@ async function toggleWf(id,actif){
 // BROADCASTS
 async function loadBroadcastCount(){
   try{
-    var r=await fetch('/inbox/contacts/${bot.id}');
+    var r=await fetch("/inbox/contacts/${bot.id}");
     var d=await r.json();
     document.getElementById('bc-count').textContent='📊 '+d.total+' contact'+(d.total!==1?'s':'')+' dans votre liste';
   }catch(e){}
@@ -2588,7 +2588,7 @@ async function sendBroadcast(){
   if(!confirm('Envoyer ce message à tous vos contacts?'))return;
   btn.disabled=true;btn.textContent='⏳ Envoi en cours...';
   try{
-    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',message:msg})});
+    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:"${bot.id}",message:msg})});
     var d=await r.json();
     res.style.display='block';
     if(d.success){res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Envoyé à '+d.sent+' contacts!'+(d.failed>0?' ('+d.failed+' échecs)':'');document.getElementById('bc-msg').value='';}
@@ -2603,13 +2603,13 @@ async function sendBroadcast(){
 var rdvDateSelectionnee = new Date().toISOString().split('T')[0];
 
 async function loadRdvSemaine(){
-  const r = await fetch('/rdv/semaine/${bot.id}');
+  const r = await fetch("/rdv/semaine/${bot.id}");
   const data = await r.json();
   const el = document.getElementById('rdv-semaine');
   el.innerHTML = '';
   data.jours.forEach(j => {
     const btn = document.createElement('button');
-    btn.style.cssText = 'min-width:80px;padding:10px 8px;border-radius:10px;border:1.5px solid '+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#d1e5d8')+';background:'+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#fff')+';cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0';
+    btn.style.cssText = 'min-width:80px;padding:10px 8px;border-radius:10px;border:1.5px solid '+(j.date===rdvDateSelectionnee?"${bot.couleur}":'#d1e5d8')+';background:'+(j.date===rdvDateSelectionnee?"${bot.couleur}":'#fff')+';cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0';
     btn.innerHTML = '<div style="font-size:11px;font-weight:600;color:'+(j.date===rdvDateSelectionnee?'#fff':'#5a7060')+'">'+j.label+'</div><div style="font-size:16px;font-weight:800;color:'+(j.ferme?'#ccc':(j.date===rdvDateSelectionnee?'#fff':'#0a1a0f'))+'">'+(!j.ferme?j.creneauxDispo:'—')+'</div><div style="font-size:10px;color:'+(j.date===rdvDateSelectionnee?'rgba(255,255,255,.7)':'#9ab0a0')+'">'+(j.ferme?'Fermé':j.creneauxDispo+' libres')+'</div>';
     if(!j.ferme){btn.onclick=()=>{rdvDateSelectionnee=j.date;loadRdvSemaine();loadRdvListe(j.date);};}
     el.appendChild(btn);
@@ -2617,12 +2617,12 @@ async function loadRdvSemaine(){
   loadRdvListe(rdvDateSelectionnee);
 
   // RDV du jour pour le stat
-  const today = await fetch('/rdv/today/${bot.id}').then(r=>r.json());
+  const today = await fetch("/rdv/today/${bot.id}").then(r=>r.json());
   document.getElementById('rdv-today-count').textContent = today.length || '0';
 }
 
 async function loadRdvListe(date){
-  const r = await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const r = await fetch("/rdv/creneaux/${bot.id}?date="+date);
   const data = await r.json();
   const el = document.getElementById('rdv-liste');
 
@@ -2631,10 +2631,10 @@ async function loadRdvListe(date){
     return;
   }
 
-  const rdvsConfirmes = await fetch('/rdv/semaine/${bot.id}').then(r=>r.json());
+  const rdvsConfirmes = await fetch("/rdv/semaine/${bot.id}").then(r=>r.json());
 
   // Récupère les RDV confirmés pour cette date
-  const rdvsDate = await fetch('/rdv/creneaux/${bot.id}?date='+date).then(r=>r.json());
+  const rdvsDate = await fetch("/rdv/creneaux/${bot.id}?date="+date).then(r=>r.json());
 
   const dateLabel = new Date(date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
   el.innerHTML = '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
@@ -2669,7 +2669,7 @@ async function sauvegarderDispo(){
     slot: parseInt(document.getElementById('slot-'+(i+1))?.value || '60')
   })).filter(d => d.actif);
 
-  await fetch('/rdv/disponibilites/${bot.id}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
+  await fetch("/rdv/disponibilites/${bot.id}",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
   alert('✅ Horaires sauvegardés!');
   document.getElementById('config-dispo').style.display='none';
   loadRdvSemaine();
@@ -2687,11 +2687,11 @@ function showTab(id,btn){
   if(id==='rdv') loadRdvSemaine();
 }
 function copyLink(){
-  navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(function(){alert('Lien copie!');});
+  navigator.clipboard.writeText("${CONFIG.BASE_URL}/chat/${bot.id}").then(function(){alert('Lien copie!');});
 }
 function copyWidget(){
-  var code = '\\x3cscript\\x3ewindow.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};\\x3c/script\\x3e\\n\\x3cscript src="${CONFIG.BASE_URL}/widget.js" async\\x3e\\x3c/script\\x3e';
-  navigator.clipboard.writeText(code).then(function(){alert('Code copie!');});
+  var t = document.getElementById('wcode-inline');
+  if(t){ navigator.clipboard.writeText(t.textContent).then(function(){alert('Code copie!');}); }
 }
 async function updateStatut(id,s){
   await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});
@@ -3540,7 +3540,7 @@ function renderActions(actions){
       return;
     }
     if(a.type==='rating'){showRating();return;}
-    if(a.type==='share'){var b=document.createElement('button');b.className='act act-share';b.textContent=a.label;b.onclick=function(){if(navigator.share)navigator.share({title:'${bot.nom}',url:window.location.href});else{navigator.clipboard.writeText(window.location.href);alert('✅ Lien copié!');}};el.appendChild(b);return;}
+    if(a.type==='share'){var b=document.createElement('button');b.className='act act-share';b.textContent=a.label;b.onclick=function(){if(navigator.share)navigator.share({title:"${bot.nom}",url:window.location.href});else{navigator.clipboard.writeText(window.location.href);alert('✅ Lien copié!');}};el.appendChild(b);return;}
     if(a.type==='cash'){var b=document.createElement('button');b.className='act act-cash';b.textContent=a.label;b.onclick=function(){addMsg('✅ Paiement à la livraison noté! Votre commande est confirmée.',false);el.innerHTML='';};el.appendChild(b);return;}
     if(!a.url&&a.type==='hours'){var s=document.createElement('span');s.className='act act-hours';s.textContent=a.label;el.appendChild(s);return;}
     if(a.url){var l=document.createElement('a');l.className='act act-'+a.type;l.textContent=a.label;l.href=a.url;l.target='_blank';l.rel='noopener';el.appendChild(l);}
@@ -3559,7 +3559,7 @@ async function ouvrirRdv(){
 function fermerRdv(){document.getElementById('rdv-modal').style.display='none';rdvDateSel=null;rdvHeureSel=null;}
 
 async function chargerSemaineRdv(){
-  const r=await fetch('/rdv/semaine/${bot.id}');
+  const r=await fetch("/rdv/semaine/${bot.id}");
   const data=await r.json();
   const el=document.getElementById('rdv-days');
   el.innerHTML='';
@@ -3573,7 +3573,7 @@ async function chargerSemaineRdv(){
 }
 
 async function chargerCreneaux(date){
-  const r=await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const r=await fetch("/rdv/creneaux/${bot.id}?date="+date);
   const data=await r.json();
   const el=document.getElementById('rdv-slots');
   el.innerHTML='';
@@ -3594,7 +3594,7 @@ async function confirmerRdv(){
   var btn=document.getElementById('rdv-confirm-btn');
   btn.textContent='⏳ Confirmation...';btn.disabled=true;
   try{
-    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,clientEmail:document.getElementById('rdv-email')?.value||'',service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
+    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:"${bot.id}",sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,clientEmail:document.getElementById('rdv-email')?.value||'',service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
     var data=await r.json();
     if(data.success){
       fermerRdv();
