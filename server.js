@@ -2597,15 +2597,6 @@ async function sendBroadcast(){
   btn.disabled=false;btn.textContent='📣 Envoyer à tous mes contacts';
 }
 
-// Charge workflows et broadcast count au démarrage
-function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');if(id==='rdv')loadRdvSemaine();}
-function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
-function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
-async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
-
-loadWorkflows();
-loadBroadcastCount();
-
 // ============================================
 // RDV JavaScript
 // ============================================
@@ -2687,6 +2678,19 @@ async function sauvegarderDispo(){
 // Charge les RDV au démarrage
 loadRdvSemaine();
 setTimeout(()=>location.reload(),60000);
+
+function showTab(id,btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  btn.classList.add('active');
+  if(id==='rdv') loadRdvSemaine();
+}
+function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
+function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
+async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
+loadWorkflows();
+loadBroadcastCount();
 </script>
 </body></html>`);
   } catch(e) { res.status(500).send('Erreur: '+e.message); }
