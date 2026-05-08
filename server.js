@@ -2180,7 +2180,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <a class="btn btn-p" href="/chat/${bot.id}" target="_blank">💬 Chat</a>
     <a class="btn btn-g" href="/inbox/${bot.id}" target="_blank">📥 Inbox</a>
     <button class="btn btn-g" onclick="copyLink()">🔗 Lien</button>
-    <button class="btn btn-g" onclick="document.getElementById('wm').style.display='flex'">📋 Widget</button>
+    <button class="btn btn-g" onclick="document.getElementById(&quot;wm&quot;).style.display=&quot;flex&quot;">📋 Widget</button>
     <button class="btn btn-g" onclick="location.reload()">🔄</button>
   </div>
 
@@ -2241,7 +2241,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div style="margin-top:16px;display:flex;gap:8px">
           <button class="btn btn-p" onclick="sauvegarderDispo()">💾 Sauvegarder</button>
-          <button class="btn btn-g" onclick="document.getElementById('config-dispo').style.display='none'">Annuler</button>
+          <button class="btn btn-g" onclick="document.getElementById(&quot;config-dispo&quot;).style.display=&quot;none&quot;">Annuler</button>
         </div>
       </div>
     </div>
@@ -2385,7 +2385,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <div class="card">
       <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
         <span>⚡ Workflows automatiques</span>
-        <button class="btn btn-p" style="font-size:11px;padding:6px 12px" onclick="document.getElementById('wf-add').style.display='block'">+ Nouveau</button>
+        <button class="btn btn-p" style="font-size:11px;padding:6px 12px" onclick="document.getElementById(&quot;wf-add&quot;).style.display=&quot;block&quot;">+ Nouveau</button>
       </div>
       <p style="font-size:13px;color:#5a7060;margin-bottom:16px">Réponses automatiques selon les mots-clés ou événements.</p>
 
@@ -2412,7 +2412,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-p" onclick="saveWorkflow()">💾 Sauvegarder</button>
-          <button class="btn btn-g" onclick="document.getElementById('wf-add').style.display='none'">Annuler</button>
+          <button class="btn btn-g" onclick="document.getElementById(&quot;wf-add&quot;).style.display=&quot;none&quot;">Annuler</button>
         </div>
         <div id="wf-result" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px"></div>
       </div>
@@ -2500,7 +2500,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:14px">📋 Code widget</div>
     <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId:BID, couleur: BCOL };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
     <button class="cp" onclick="copyWidget()">📋 Copier</button>
-    <button onclick="document.getElementById('wm').style.display='none'" style="margin-left:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a7060">Fermer</button>
+    <button onclick="document.getElementById(&quot;wm&quot;).style.display=&quot;none&quot;" style="margin-left:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a7060">Fermer</button>
   </div>
 </div>
 
