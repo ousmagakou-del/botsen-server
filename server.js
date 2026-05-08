@@ -4078,7 +4078,9 @@ function filterTable(tableId, query){
 async function loadData(){
   try{
     var r = await fetch('/admin/stats?secret='+secret);
+    if(!r.ok){ document.getElementById('last-refresh').textContent='Erreur '+r.status; return; }
     var d = await r.json();
+    if(!d || !d.stats){ document.getElementById('last-refresh').textContent='Données invalides'; return; }
     allData = d;
 
     // KPIs
