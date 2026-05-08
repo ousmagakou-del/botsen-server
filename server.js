@@ -2551,7 +2551,7 @@ async function loadWorkflows(){
       +'<div style="font-size:11px;color:#9ab0a0;margin-top:2px">'+w.trigger_type+(w.trigger_valeur?' → "'+w.trigger_valeur+'"':'')+'</div>'
       +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'\u2026</div></div>'
       +'<div style="display:flex;gap:6px">'
-      +'<button data-wid="'+w.id+'" data-actif="'+w.actif+'" onclick="toggleWf(this.dataset.wid,this.dataset.actif===\'true\')" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
+      +'<button data-wid="'+w.id+'" data-actif="'+w.actif+'" onclick="toggleWf(this.dataset.wid,this.dataset.actif==String(true))" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
       +'</div></div>').join('');
   }catch(e){document.getElementById('wf-list').innerHTML='<div style="color:#ef4444;font-size:13px">Erreur chargement</div>';}
 }
