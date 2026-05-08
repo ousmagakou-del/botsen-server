@@ -2495,7 +2495,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 </div>
 
 <!-- MODAL WIDGET -->
-<div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display="none"">
+<div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:#fff;border-radius:16px;padding:22px;max-width:480px;width:100%">
     <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:14px">📋 Code widget</div>
     <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId:BID, couleur: BCOL };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
@@ -3479,6 +3479,7 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 <script>
 var sid='p_'+Math.random().toString(36).substr(2,9);
 var botId='${req.params.botId}';
+var BID=botId;
 var logoSrc='${bot.logo_url||''}';
 var botEmoji='${bot.emoji}';
 var isRec=false,mediaRec=null,audioChunks=[];
