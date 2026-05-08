@@ -2686,8 +2686,14 @@ function showTab(id,btn){
   btn.classList.add('active');
   if(id==='rdv') loadRdvSemaine();
 }
-function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
-function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
+function copyLink(){
+  var url = '${CONFIG.BASE_URL}/chat/${bot.id}';
+  navigator.clipboard.writeText(url).then(function(){alert('Lien copie!');});
+}
+function copyWidget(){
+  var code = '<script>window.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};<\\/script><script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>';
+  navigator.clipboard.writeText(code).then(function(){alert('Code copie!');});
+}
 async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
 loadWorkflows();
 loadBroadcastCount();
