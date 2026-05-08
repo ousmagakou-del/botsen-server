@@ -2691,8 +2691,9 @@ function copyLink(){
   navigator.clipboard.writeText(url).then(function(){alert('Lien copie!');});
 }
 function copyWidget(){
-  var code = '<script>window.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};<\\/script><script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>';
-  navigator.clipboard.writeText(code).then(function(){alert('Code copie!');});
+  var s1 = '<scr'+'ipt>window.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};<'+'/scr'+'ipt>';
+  var s2 = '<scr'+'ipt src="${CONFIG.BASE_URL}/widget.js" async><'+'/scr'+'ipt>';
+  navigator.clipboard.writeText(s1+'\\n'+s2).then(function(){alert('Code copie!');});
 }
 async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
 loadWorkflows();
