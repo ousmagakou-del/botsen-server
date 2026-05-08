@@ -2495,7 +2495,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 </div>
 
 <!-- MODAL WIDGET -->
-<div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display='none'">
+<div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display="none"">
   <div style="background:#fff;border-radius:16px;padding:22px;max-width:480px;width:100%">
     <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:14px">📋 Code widget</div>
     <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId:BID, couleur: BCOL };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
@@ -2513,21 +2513,21 @@ async function importCatalogue(){
   var key=document.getElementById('imp-key').value.trim();
   var res=document.getElementById('imp-result');
   var btn=document.getElementById('imp-btn');
-  if(!url){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez une URL';return;}
+  if(!url){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez une URL';return;}
   btn.disabled=true;btn.textContent='⏳ Import en cours...';
-  res.style.display='none';
+  res.style.display="none";
   try{
     var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,url,type,apiKey:key||undefined})});
     var d=await r.json();
     if(d.success){
-      res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';
+      res.style.display="block";res.style.background='#dcfce7';res.style.color='#166534';
       res.textContent='✅ '+d.count+' produits importés! Rechargement...';
       setTimeout(()=>location.reload(),2000);
     }else{
-      res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+      res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';
       res.textContent='❌ '+( d.error||'Erreur import')+'. '+(d.tip||'');
     }
-  }catch(e){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ Erreur réseau';}
+  }catch(e){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ Erreur réseau';}
   btn.disabled=false;btn.textContent='🔄 Importer le catalogue';
 }
 
@@ -2562,12 +2562,12 @@ async function saveWorkflow(){
   var val=document.getElementById('wf-val').value.trim();
   var rep=document.getElementById('wf-rep').value.trim();
   var res=document.getElementById('wf-result');
-  if(!nom||!rep){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
+  if(!nom||!rep){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
   try{
     var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,nom,trigger,valeur:val,reponse:rep})});
     var d=await r.json();
-    if(d.success){res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
-    else{res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
+    if(d.success){res.style.display="block";res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
+    else{res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
   }catch(e){alert('Erreur réseau');}
 }
 
@@ -2589,13 +2589,13 @@ async function sendBroadcast(){
   var msg=document.getElementById('bc-msg').value.trim();
   var res=document.getElementById('bc-result');
   var btn=document.getElementById('bc-btn');
-  if(!msg){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez un message';return;}
+  if(!msg){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez un message';return;}
   if(!confirm('Envoyer ce message à tous vos contacts?'))return;
   btn.disabled=true;btn.textContent='⏳ Envoi en cours...';
   try{
     var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,message:msg})});
     var d=await r.json();
-    res.style.display='block';
+    res.style.display="block";
     if(d.success){res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Envoyé à '+d.sent+' contacts!'+(d.failed>0?' ('+d.failed+' échecs)':'');document.getElementById('bc-msg').value='';}
     else{res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
   }catch(e){alert('Erreur réseau');}
@@ -2662,7 +2662,7 @@ async function sauvegarderDispo(){
 
   await fetch('/rdv/disponibilites/'+BID,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
   alert('✅ Horaires sauvegardés!');
-  document.getElementById('config-dispo').style.display='none';
+  document.getElementById('config-dispo').style.display="none";
   loadRdvSemaine();
 }
 
@@ -4159,7 +4159,7 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'10.2', status:'active',
+  app:'🤖 SamaBot IA', version:'10.3', status:'active',
   features:['broadcasts','inbox-unifiee','workflow-automation','multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
