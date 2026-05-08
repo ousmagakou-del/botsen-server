@@ -4168,7 +4168,7 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'10.0', status:'active',
+  app:'🤖 SamaBot IA', version:'10.1', status:'active',
   features:['broadcasts','inbox-unifiee','workflow-automation','multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
