@@ -4404,16 +4404,20 @@ function logout(){
   window.location.href='/login';
 }
 
-// Récupère token depuis URL (Google OAuth callback)
+// Récupère token depuis URL (Google OAuth callback ou reset-password)
 (function(){
   try {
-    var params = new URLSearchParams(window.location.search);
-    var t = params.get('token');
-    var u = params.get('user');
-    if(t){
-      // Token est URL-safe base64 — pas besoin de décoder
+    // Utilise location.href directement pour éviter les problèmes de parsing
+    var href = window.location.href;
+    var tokenMatch = href.match(/[?&]token=([^&]+)/);
+    var userMatch = href.match(/[?&]user=([^&]+)/);
+    if(tokenMatch && tokenMatch[1]){
+      var t = tokenMatch[1];
       localStorage.setItem('sb-token', t);
-      if(u){ try{ localStorage.setItem('sb-user', decodeURIComponent(u)); }catch(e){} }
+      if(userMatch && userMatch[1]){
+        try{ localStorage.setItem('sb-user', decodeURIComponent(userMatch[1])); }catch(e){}
+      }
+      // Nettoie l'URL après avoir sauvegardé
       window.history.replaceState({},'','/app');
     }
   } catch(e) { console.error('Token parse error:', e); }
