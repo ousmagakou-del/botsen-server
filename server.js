@@ -4428,7 +4428,7 @@ var userRaw = localStorage.getItem('sb-user') || '{}';
 var user = {};
 try { user = JSON.parse(userRaw); } catch(e) {}
 
-if(!token){ window.location.href = '/login'; }
+if(!token){ window.location.href = '/login'; throw new Error('no token'); }
 
 var nameEl = document.getElementById('u-name');
 if(nameEl) nameEl.textContent = user.nom || user.email || '';
