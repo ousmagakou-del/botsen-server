@@ -2687,15 +2687,16 @@ function showTab(id,btn){
   if(id==='rdv') loadRdvSemaine();
 }
 function copyLink(){
-  var url = '${CONFIG.BASE_URL}/chat/${bot.id}';
-  navigator.clipboard.writeText(url).then(function(){alert('Lien copie!');});
+  navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(function(){alert('Lien copie!');});
 }
 function copyWidget(){
-  var s1 = '<scr'+'ipt>window.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};<'+'/scr'+'ipt>';
-  var s2 = '<scr'+'ipt src="${CONFIG.BASE_URL}/widget.js" async><'+'/scr'+'ipt>';
-  navigator.clipboard.writeText(s1+'\\n'+s2).then(function(){alert('Code copie!');});
+  var code = '\\x3cscript\\x3ewindow.SamaBotConfig={botId:"${bot.id}",couleur:"${bot.couleur}"};\\x3c/script\\x3e\\n\\x3cscript src="${CONFIG.BASE_URL}/widget.js" async\\x3e\\x3c/script\\x3e';
+  navigator.clipboard.writeText(code).then(function(){alert('Code copie!');});
 }
-async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
+async function updateStatut(id,s){
+  await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});
+  setTimeout(function(){location.reload();},500);
+}
 loadWorkflows();
 loadBroadcastCount();
 </script>
