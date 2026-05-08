@@ -410,7 +410,16 @@ app.post('/chat', async (req, res) => {
     const sid = sessionId || `${botId}_${Date.now()}`;
     const intents = detectIntent(message, bot);
 
-    const reply = await callAI(bot.prompt, sid, message);
+    // Vérifie les workflows avant l'IA
+    const workflowReply = await runWorkflows(botId, message, sid);
+
+    let reply;
+    if (workflowReply) {
+      reply = workflowReply;
+      console.log(`⚡ Réponse workflow pour bot ${botId}`);
+    } else {
+      reply = await callAI(bot.prompt, sid, message);
+    }
 
     // Détecte si le BOT demande l'adresse dans sa réponse
     // → affiche les boutons GPS
@@ -751,6 +760,368 @@ app.post('/import/sync/:botId', async (req, res) => {
 });
 
 // ============================================
+// BROADCASTS — Messages en masse
+// ============================================
+
+// Créer et envoyer un broadcast
+app.post('/broadcast/send', async (req, res) => {
+  try {
+    const { botId, message, filtre, mediaUrl } = req.body;
+    if (!botId || !message) return res.status(400).json({ error:'botId et message requis' });
+
+    // Récupère tous les contacts uniques du bot
+    const convs = await db.select('conversations', `?bot_id=eq.${botId}&order=created_at.desc`);
+    if (!convs?.length) return res.json({ success:true, sent:0, message:'Aucun contact' });
+
+    const bot = (await db.select('bots', `?id=eq.${botId}`))?.[0];
+    if (!bot) return res.status(404).json({ error:'Bot non trouvé' });
+
+    let sent = 0;
+    let failed = 0;
+    const results = [];
+
+    for (const conv of convs) {
+      try {
+        // Envoie via WhatsApp si numéro disponible
+        if (conv.client_tel && CONFIG.WASENDER_API_KEY) {
+          const waMsg = `📣 *${bot.nom}*\n\n${message}`;
+          const ok = await sendWhatsApp(conv.client_tel, waMsg);
+          if (ok) sent++;
+          else failed++;
+        } else {
+          // Sinon sauvegarde comme message sortant dans la conversation
+          await db.insert('messages', {
+            conversation_id: conv.id,
+            bot_id: botId,
+            role: 'broadcast',
+            content: message
+          });
+          sent++;
+        }
+        results.push({ session: conv.session_id, status: 'sent' });
+      } catch(e) {
+        failed++;
+        results.push({ session: conv.session_id, status: 'failed', error: e.message });
+      }
+    }
+
+    // Sauvegarde le broadcast en DB
+    await db.insert('broadcasts', {
+      bot_id: botId,
+      message,
+      total_sent: sent,
+      total_failed: failed,
+      statut: 'sent'
+    }).catch(()=>{});
+
+    console.log(`📣 Broadcast envoyé: ${sent} succès, ${failed} échecs`);
+    res.json({ success:true, sent, failed, total: convs.length });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Historique des broadcasts
+app.get('/broadcast/history/:botId', async (req, res) => {
+  try {
+    const broadcasts = await db.select('broadcasts', `?bot_id=eq.${req.params.botId}&order=created_at.desc&limit=20`);
+    res.json(broadcasts || []);
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// INBOX UNIFIÉE — Tous les messages d'un bot
+// ============================================
+app.get('/inbox/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}`);
+    const bot = bots?.[0];
+    if (!bot) return res.status(404).send('Bot non trouvé');
+
+    const convs = await db.select('conversations',
+      `?bot_id=eq.${req.params.botId}&order=last_message_at.desc&limit=50`
+    );
+
+    const base = CONFIG.BASE_URL;
+    res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${bot.nom} — Inbox</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:#f0f4f1;height:100vh;display:flex;flex-direction:column}
+.nav{background:#0a1a0f;height:54px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.logo{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;color:#fff}.logo span{color:#00c875}
+.bot-name{font-size:13px;color:rgba(255,255,255,.6)}
+.inbox-wrap{display:flex;flex:1;overflow:hidden}
+.conv-list{width:320px;border-right:1px solid #e5e7eb;background:#fff;overflow-y:auto;flex-shrink:0}
+.conv-item{padding:14px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;transition:background .15s;display:flex;gap:10px;align-items:flex-start}
+.conv-item:hover,.conv-item.active{background:#f0f4f1}
+.conv-ava{width:38px;height:38px;border-radius:50%;background:#00c875;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:#fff;font-weight:700}
+.conv-name{font-size:14px;font-weight:600;color:#0a1a0f}
+.conv-preview{font-size:12px;color:#9ab0a0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.conv-time{font-size:10px;color:#c0d0c4;margin-top:2px}
+.unread{background:#00c875;color:#fff;border-radius:50%;width:18px;height:18px;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.chat-head{background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+.chat-head-name{font-size:15px;font-weight:700;color:#0a1a0f}
+.chat-head-sub{font-size:12px;color:#9ab0a0;margin-top:2px}
+.msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:#f9faf9}
+.msg{display:flex;gap:8px;align-items:flex-end;max-width:80%}
+.msg.bot{align-self:flex-start}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.bubble{padding:9px 13px;border-radius:12px;font-size:13px;line-height:1.5}
+.bubble.bot{background:#fff;border:1px solid #e5e7eb;color:#0a1a0f;border-radius:2px 12px 12px 12px}
+.bubble.user{background:#00c875;color:#fff;border-radius:12px 12px 2px 12px}
+.msg-time{font-size:10px;color:#c0d0c4;margin:0 4px 2px}
+.reply-bar{background:#fff;border-top:1px solid #e5e7eb;padding:12px 16px;display:flex;gap:10px;align-items:center}
+.reply-input{flex:1;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;resize:none;max-height:100px}
+.reply-input:focus{border-color:#00c875}
+.send-btn{background:#00c875;color:#fff;border:none;border-radius:10px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+.empty-state{flex:1;display:flex;align-items:center;justify-content:center;color:#9ab0a0;font-size:14px;flex-direction:column;gap:8px}
+.broadcast-btn{background:#0a1a0f;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
+.broadcast-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:none;align-items:center;justify-content:center}
+.broadcast-sheet{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:480px}
+.b-title{font-size:16px;font-weight:800;color:#0a1a0f;margin-bottom:16px}
+textarea.b-msg{width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:12px;font-size:14px;font-family:inherit;outline:none;resize:vertical;min-height:100px;margin-bottom:12px}
+textarea.b-msg:focus{border-color:#00c875}
+.b-btns{display:flex;gap:8px}
+.b-send{background:#00c875;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;flex:1}
+.b-cancel{background:#f0f4f1;color:#0a1a0f;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+@media(max-width:600px){.conv-list{width:100%;display:block}.chat-area{display:none}.conv-list.hide{display:none}.chat-area.show{display:flex}}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="logo">Sama<span>Bot</span></div>
+  <div class="bot-name">${bot.emoji} ${bot.nom}</div>
+  <button class="broadcast-btn" onclick="openBroadcast()">📣 Broadcast</button>
+</div>
+
+<div class="inbox-wrap">
+  <div class="conv-list" id="conv-list">
+    ${convs?.length ? convs.map(c => `
+    <div class="conv-item" onclick="loadConv('${c.id}','${c.session_id||''}',this)">
+      <div class="conv-ava">${c.session_id?.charAt(0)?.toUpperCase()||'?'}</div>
+      <div style="flex:1;min-width:0">
+        <div class="conv-name">${c.session_id||'Visiteur'}</div>
+        <div class="conv-preview">Cliquez pour voir les messages</div>
+        <div class="conv-time">${new Date(c.last_message_at||c.created_at).toLocaleString('fr-FR')}</div>
+      </div>
+      <div class="conv-ava" style="width:8px;height:8px;background:#00c875;border-radius:50%;margin-top:6px"></div>
+    </div>`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
+  </div>
+
+  <div class="chat-area" id="chat-area">
+    <div class="empty-state">
+      <div style="font-size:32px">💬</div>
+      <div>Sélectionnez une conversation</div>
+    </div>
+  </div>
+</div>
+
+<!-- BROADCAST MODAL -->
+<div class="broadcast-modal" id="b-modal">
+  <div class="broadcast-sheet">
+    <div class="b-title">📣 Envoyer un broadcast</div>
+    <div style="font-size:13px;color:#5a7060;margin-bottom:12px" id="b-count">Chargement du nombre de contacts...</div>
+    <textarea class="b-msg" id="b-msg" placeholder="Votre message à tous vos clients...&#10;&#10;Ex: 🎉 Promotion spéciale! -20% ce weekend sur tout le catalogue. Venez vite!"></textarea>
+    <div class="b-btns">
+      <button class="b-cancel" onclick="closeBroadcast()">Annuler</button>
+      <button class="b-send" id="b-send-btn" onclick="sendBroadcast()">📣 Envoyer à tous</button>
+    </div>
+    <div id="b-result" style="display:none;margin-top:12px;padding:10px;border-radius:8px;font-size:13px"></div>
+  </div>
+</div>
+
+<script>
+var botId = '${bot.id}';
+var currentConvId = null;
+
+async function loadConv(convId, sessionId, el) {
+  document.querySelectorAll('.conv-item').forEach(i=>i.classList.remove('active'));
+  el.classList.add('active');
+  currentConvId = convId;
+
+  var area = document.getElementById('chat-area');
+  area.innerHTML = '<div class="chat-head"><div><div class="chat-head-name">'+sessionId+'</div><div class="chat-head-sub">Conversation</div></div></div><div class="msgs" id="msgs-area"><div style="text-align:center;color:#9ab0a0;font-size:12px;padding:20px">Chargement...</div></div><div class="reply-bar"><textarea class="reply-input" id="reply-input" placeholder="Répondre..." rows="1" onkeydown="handleKey(event)"></textarea><button class="send-btn" onclick="sendReply()">Envoyer</button></div>';
+
+  try {
+    var r = await fetch('/inbox/messages/'+convId);
+    var msgs = await r.json();
+    var area2 = document.getElementById('msgs-area');
+    if(!msgs.length){area2.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:12px;padding:20px">Aucun message</div>';return;}
+    area2.innerHTML = msgs.map(m => {
+      var isBot = m.role==='assistant'||m.role==='broadcast';
+      return '<div class="msg '+(isBot?'bot':'user')+'">'
+        +(isBot?'<div class="conv-ava" style="width:28px;height:28px;font-size:12px;background:#00c875">🤖</div>':'')
+        +'<div><div class="bubble '+(isBot?'bot':'user')+'">'+m.content+'</div><div class="msg-time">'+new Date(m.created_at).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</div></div>'
+        +'</div>';
+    }).join('');
+    area2.scrollTop = area2.scrollHeight;
+  } catch(e) { document.getElementById('msgs-area').innerHTML='<div style="color:#ef4444;padding:20px">Erreur: '+e.message+'</div>'; }
+}
+
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendReply();}}
+
+async function sendReply(){
+  var input=document.getElementById('reply-input');
+  var msg=input.value.trim();
+  if(!msg||!currentConvId)return;
+  input.value='';
+  try{
+    await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg,sessionId:currentConvId,fromDashboard:true})});
+    // Reload messages
+    var btn=document.querySelector('.conv-item.active');
+    if(btn)btn.click();
+  }catch(e){alert('Erreur envoi');}
+}
+
+function openBroadcast(){
+  document.getElementById('b-modal').style.display='flex';
+  fetch('/inbox/contacts/'+botId).then(r=>r.json()).then(d=>{
+    document.getElementById('b-count').textContent='📊 '+d.total+' contacts dans votre liste';
+  }).catch(()=>{document.getElementById('b-count').textContent='Contacts disponibles';});
+}
+
+function closeBroadcast(){document.getElementById('b-modal').style.display='none';document.getElementById('b-result').style.display='none';}
+
+async function sendBroadcast(){
+  var msg=document.getElementById('b-msg').value.trim();
+  if(!msg){alert('Entrez un message');return;}
+  var btn=document.getElementById('b-send-btn');
+  btn.disabled=true;btn.textContent='⏳ Envoi...';
+  try{
+    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg})});
+    var d=await r.json();
+    var res=document.getElementById('b-result');
+    res.style.display='block';
+    if(d.success){res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Envoyé à '+d.sent+' contacts!'+(d.failed>0?' ('+d.failed+' échecs)':'');}
+    else{res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ '+d.error;}
+    document.getElementById('b-msg').value='';
+  }catch(e){alert('Erreur réseau');}
+  btn.disabled=false;btn.textContent='📣 Envoyer à tous';
+}
+</script>
+</body>
+</html>`);
+  } catch(e) { res.status(500).send('Erreur: '+e.message); }
+});
+
+// Messages d'une conversation
+app.get('/inbox/messages/:convId', async (req, res) => {
+  try {
+    const msgs = await db.select('messages', `?conversation_id=eq.${req.params.convId}&order=created_at.asc&limit=100`);
+    res.json(msgs || []);
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Nombre de contacts d'un bot
+app.get('/inbox/contacts/:botId', async (req, res) => {
+  try {
+    const convs = await db.select('conversations', `?bot_id=eq.${req.params.botId}`);
+    res.json({ total: convs?.length || 0 });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// WORKFLOW AUTOMATION
+// ============================================
+
+// Récupère les workflows d'un bot
+app.get('/workflow/:botId', async (req, res) => {
+  try {
+    const workflows = await db.select('workflows', `?bot_id=eq.${req.params.botId}&order=created_at.desc`);
+    res.json(workflows || []);
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Crée un workflow
+app.post('/workflow/create', async (req, res) => {
+  try {
+    const { botId, nom, trigger, action, valeur, reponse, actif } = req.body;
+    if (!botId || !trigger || !reponse) return res.status(400).json({ error:'botId, trigger et reponse requis' });
+
+    const wf = await db.insert('workflows', {
+      bot_id: botId,
+      nom: nom || 'Workflow',
+      trigger_type: trigger, // keyword, order, rdv, payment, rating
+      trigger_valeur: valeur || null,
+      action_type: action || 'reply',
+      action_reponse: reponse,
+      actif: actif !== false
+    });
+
+    res.json({ success:true, workflow: wf?.[0] });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Active/désactive un workflow
+app.patch('/workflow/:id/toggle', async (req, res) => {
+  try {
+    const wfs = await db.select('workflows', `?id=eq.${req.params.id}`);
+    const wf = wfs?.[0];
+    if (!wf) return res.status(404).json({ error:'Workflow non trouvé' });
+    await db.update('workflows', { actif: !wf.actif }, `?id=eq.${req.params.id}`);
+    res.json({ success:true, actif: !wf.actif });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Supprime un workflow
+app.delete('/workflow/:id', async (req, res) => {
+  try {
+    await db.update('workflows', { actif: false }, `?id=eq.${req.params.id}`);
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Exécute les workflows automatiquement dans le chat
+async function runWorkflows(botId, message, sessionId) {
+  try {
+    const workflows = await db.select('workflows', `?bot_id=eq.${botId}&actif=eq.true`);
+    if (!workflows?.length) return null;
+
+    const msgLower = message.toLowerCase();
+
+    for (const wf of workflows) {
+      let triggered = false;
+
+      switch(wf.trigger_type) {
+        case 'keyword':
+          // Déclenche si le message contient le mot-clé
+          if (wf.trigger_valeur && msgLower.includes(wf.trigger_valeur.toLowerCase())) {
+            triggered = true;
+          }
+          break;
+        case 'greeting':
+          if (/bonjour|salut|salam|asalaa|hello|hi\b/.test(msgLower)) triggered = true;
+          break;
+        case 'promo':
+          if (/promo|réduction|solde|offre|discount/.test(msgLower)) triggered = true;
+          break;
+        case 'horaires':
+          if (/heure|horaire|ouvert|fermé|quand/.test(msgLower)) triggered = true;
+          break;
+        case 'first_message':
+          // Déclenche uniquement pour le premier message
+          const count = await db.select('messages', `?bot_id=eq.${botId}&role=eq.user&select=id`);
+          if (count?.length <= 1) triggered = true;
+          break;
+      }
+
+      if (triggered) {
+        console.log(`⚡ Workflow déclenché: ${wf.nom} → ${wf.trigger_type}`);
+        return wf.action_reponse;
+      }
+    }
+    return null;
+  } catch(e) {
+    console.error('runWorkflows error:', e.message);
+    return null;
+  }
+}
+
+// ============================================
 // AVIS
 // ============================================
 app.post('/avis', async (req, res) => {
@@ -850,9 +1221,10 @@ app.get('/auth/google/callback', async (req, res) => {
     if (!user) return res.redirect('/login?error=user_create');
 
     const token = generateToken(user.id);
-
-    // Redirige vers /app avec token dans URL (récupéré par JS)
-    res.redirect(`/app?token=${token}&user=${encodeURIComponent(JSON.stringify({ id:user.id, email:user.email, nom:user.nom, plan:user.plan, avatar:user.avatar_url }))}`);
+    const userJson = encodeURIComponent(JSON.stringify({ id:user.id, email:user.email, nom:user.nom, plan:user.plan }));
+    // Encode le token en base64url pour éviter les problèmes avec + et / dans l'URL
+    const safeToken = encodeURIComponent(token);
+    res.redirect(`/app?token=${safeToken}&user=${userJson}`);
   } catch(e) {
     console.error('Google OAuth error:', e.message);
     res.redirect('/login?error=server');
@@ -1503,20 +1875,28 @@ async function saveMsg(botId, sessionId, userMsg, botReply) {
 // HELPERS
 // ============================================
 function getEmoji(n) {
-  return {restaurant:'🍽️',salon:'💈',clinique:'🏥',boutique:'🛍️','auto-ecole':'🚗',pharmacie:'💊',immobilier:'🏠',traiteur:'🍲',boulangerie:'🥖',default:'🤖'}[n]||'🤖';
+  return {restaurant:'🍽️',salon:'💈',clinique:'🏥',boutique:'🛍️','auto-ecole':'🚗',pharmacie:'💊',immobilier:'🏠',traiteur:'🍲',boulangerie:'🥖',assurance:'🛡️',banque:'🏦',hotel:'🏨',transport:'🚗',education:'📚',fitness:'💪',informatique:'💻',evenement:'🎉',default:'🤖'}[n]||'🤖';
 }
 function getQR(n) {
   return {
-    restaurant:  ['🍛 Voir le menu','📦 Commander','🛵 Livraison','📍 Adresse','🕐 Horaires'],
-    traiteur:    ['🍲 Notre menu','📦 Commander','🚚 Livraison','📍 Adresse','🕐 Horaires'],
-    boulangerie: ['🥖 Nos produits','📦 Commander','📍 Adresse','🕐 Horaires'],
-    salon:       ['📅 Prendre RDV','💅 Nos services','💰 Tarifs','📍 Adresse','📞 Nous appeler'],
-    clinique:    ['🚨 Urgence','📅 RDV médecin','👨‍⚕️ Nos médecins','💰 Tarifs','📍 Adresse'],
-    pharmacie:   ['💊 Médicaments','🕐 Horaires','📍 Adresse','📞 Urgence'],
-    boutique:    ['✨ Nouveautés','🔥 Promotions','📦 Commander','🚚 Livraison','📍 Adresse'],
-    'auto-ecole':['📝 S\'inscrire','💰 Tarifs','📅 Calendrier','📍 Adresse','📞 Contact'],
-    immobilier:  ['🏠 Nos biens','📅 Visite','💰 Prix','📍 Localisation','📞 Contact'],
-    autre:       ['💬 Nos services','💰 Tarifs','📅 RDV','📍 Adresse','📞 Contact'],
+    restaurant:   ['🍛 Voir le menu','📦 Commander','🛵 Livraison','📍 Adresse','🕐 Horaires'],
+    traiteur:     ['🍲 Notre menu','📦 Commander','🚚 Livraison','📍 Adresse','🕐 Horaires'],
+    boulangerie:  ['🥖 Nos produits','📦 Commander','📍 Adresse','🕐 Horaires'],
+    salon:        ['📅 Prendre RDV','💅 Nos services','💰 Tarifs','📍 Adresse','📞 Nous appeler'],
+    clinique:     ['🚨 Urgence','📅 RDV médecin','👨‍⚕️ Nos médecins','💰 Tarifs','📍 Adresse'],
+    pharmacie:    ['💊 Médicaments','🕐 Horaires','📍 Adresse','📞 Urgence'],
+    boutique:     ['✨ Nouveautés','🔥 Promotions','📦 Commander','🚚 Livraison','📍 Adresse'],
+    'auto-ecole': ['📝 S\'inscrire','💰 Tarifs','📅 Calendrier','📍 Adresse','📞 Contact'],
+    immobilier:   ['🏠 Nos biens','📅 Visite','💰 Prix','📍 Localisation','📞 Contact'],
+    assurance:    ['🛡️ Nos produits','💰 Tarifs','📋 Devis gratuit','📅 RDV conseiller','📞 Contact'],
+    banque:       ['💳 Nos services','💰 Tarifs','📅 RDV conseiller','📍 Agences','📞 Contact'],
+    hotel:        ['🏨 Disponibilités','💰 Tarifs','📅 Réserver','📍 Localisation','📞 Contact'],
+    transport:    ['🚗 Réserver','💰 Tarifs','📍 Localisation','📞 Contact'],
+    education:    ['📚 Nos formations','💰 Frais','📝 S\'inscrire','📅 Planning','📞 Contact'],
+    fitness:      ['💪 Nos programmes','💰 Abonnements','📅 Essai gratuit','📍 Adresse','📞 Contact'],
+    informatique: ['💻 Nos services','💰 Devis','🔧 Support','📍 Adresse','📞 Contact'],
+    evenement:    ['🎉 Nos prestations','💰 Tarifs','📅 Disponibilités','📍 Contact'],
+    autre:        ['💬 Nos services','💰 Tarifs','📅 RDV','📍 Adresse','📞 Contact'],
   }[n] || ['💬 Nos services','💰 Tarifs','📍 Adresse','📞 Contact'];
 }
 function makePrompt(bot) {
@@ -1765,6 +2145,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 <div class="wrap">
   <div class="actions">
     <a class="btn btn-p" href="/chat/${bot.id}" target="_blank">💬 Chat</a>
+    <a class="btn btn-g" href="/inbox/${bot.id}" target="_blank">📥 Inbox</a>
     <button class="btn btn-g" onclick="copyLink()">🔗 Lien</button>
     <button class="btn btn-g" onclick="document.getElementById('wm').style.display='flex'">📋 Widget</button>
     <button class="btn btn-g" onclick="location.reload()">🔄</button>
@@ -1786,6 +2167,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <button class="tab-btn" onclick="showTab('msgs',this)">💬 ${t(lang,'tab_messages')} (${msgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('audio',this)">🎤 ${t(lang,'tab_audio')} (${audioMsgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('avis',this)">⭐ ${t(lang,'tab_reviews')} (${allAvis?.length||0})</button>
+    <button class="tab-btn" onclick="showTab('workflow',this)">⚡ Workflows</button>
     <button class="tab-btn" onclick="showTab('partage',this)">🔗 ${t(lang,'tab_share')}</button>
   </div>
 
@@ -1965,6 +2347,59 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
   </div>
 
   <!-- PARTAGE -->
+  <!-- WORKFLOWS -->
+  <div id="tab-workflow" class="tab">
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>⚡ Workflows automatiques</span>
+        <button class="btn btn-p" style="font-size:11px;padding:6px 12px" onclick="document.getElementById('wf-add').style.display='block'">+ Nouveau</button>
+      </div>
+      <p style="font-size:13px;color:#5a7060;margin-bottom:16px">Réponses automatiques selon les mots-clés ou événements.</p>
+
+      <div id="wf-add" style="display:none;background:#f0f4f1;border-radius:10px;padding:16px;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div><label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:4px">Nom</label>
+          <input id="wf-nom" placeholder="Ex: Réponse promo" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/></div>
+          <div><label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:4px">Déclencheur</label>
+          <select id="wf-trigger" onchange="toggleWfVal()" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit">
+            <option value="keyword">Mot-clé</option>
+            <option value="greeting">Salutation</option>
+            <option value="promo">Demande promo</option>
+            <option value="horaires">Question horaires</option>
+            <option value="first_message">Premier message</option>
+          </select></div>
+        </div>
+        <div id="wf-val-wrap" style="margin-bottom:10px">
+          <label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:4px">Mot-clé à détecter</label>
+          <input id="wf-val" placeholder="Ex: promo, livraison, prix..." style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;font-weight:600;color:#3a5040;display:block;margin-bottom:4px">Réponse automatique</label>
+          <textarea id="wf-rep" placeholder="Message envoyé automatiquement..." style="width:100%;border:1.5px solid #d1e5d8;border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;min-height:80px;resize:vertical"></textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-p" onclick="saveWorkflow()">💾 Sauvegarder</button>
+          <button class="btn btn-g" onclick="document.getElementById('wf-add').style.display='none'">Annuler</button>
+        </div>
+        <div id="wf-result" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px"></div>
+      </div>
+
+      <div id="wf-list">
+        <div style="text-align:center;color:#9ab0a0;font-size:13px;padding:20px">Chargement...</div>
+      </div>
+    </div>
+
+    <!-- BROADCASTS -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-title">📣 Broadcasts — Messages en masse</div>
+      <p style="font-size:13px;color:#5a7060;margin-bottom:14px">Envoyez un message à tous vos contacts d'un coup.</p>
+      <div id="bc-count" style="font-size:13px;color:#5a7060;margin-bottom:12px">Chargement...</div>
+      <textarea id="bc-msg" placeholder="Votre message promo...&#10;Ex: 🎉 -20% ce weekend sur tout le catalogue!" style="width:100%;border:1.5px solid #d1e5d8;border-radius:8px;padding:12px;font-size:13px;font-family:inherit;min-height:100px;resize:vertical;margin-bottom:10px"></textarea>
+      <button class="btn btn-p" id="bc-btn" onclick="sendBroadcast()">📣 Envoyer à tous mes contacts</button>
+      <div id="bc-result" style="display:none;margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13px"></div>
+    </div>
+  </div>
+
   <div id="tab-partage" class="tab">
     <div class="grid2">
       <div class="card">
@@ -2062,6 +2497,80 @@ async function importCatalogue(){
 }
 
 function changeLang(l){window.location.href='/dashboard/${bot.id}?lang='+l;}
+
+// WORKFLOWS
+function toggleWfVal(){
+  var t=document.getElementById('wf-trigger').value;
+  document.getElementById('wf-val-wrap').style.display=t==='keyword'?'block':'none';
+}
+toggleWfVal();
+
+async function loadWorkflows(){
+  try{
+    var r=await fetch('/workflow/${bot.id}');
+    var wfs=await r.json();
+    var el=document.getElementById('wf-list');
+    if(!wfs.length){el.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:13px;padding:20px">Aucun workflow. Créez le premier!</div>';return;}
+    el.innerHTML=wfs.map(w=>'<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f4f1">'
+      +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#0a1a0f">'+w.nom+'</div>'
+      +'<div style="font-size:11px;color:#9ab0a0;margin-top:2px">'+w.trigger_type+(w.trigger_valeur?' → "'+w.trigger_valeur+'"':'')+'</div>'
+      +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'...</div></div>'
+      +'<div style="display:flex;gap:6px">'
+      +'<button onclick="toggleWf(\''+w.id+'\','+w.actif+')" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
+      +'</div></div>').join('');
+  }catch(e){document.getElementById('wf-list').innerHTML='<div style="color:#ef4444;font-size:13px">Erreur chargement</div>';}
+}
+
+async function saveWorkflow(){
+  var nom=document.getElementById('wf-nom').value.trim();
+  var trigger=document.getElementById('wf-trigger').value;
+  var val=document.getElementById('wf-val').value.trim();
+  var rep=document.getElementById('wf-rep').value.trim();
+  var res=document.getElementById('wf-result');
+  if(!nom||!rep){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
+  try{
+    var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',nom,trigger,valeur:val,reponse:rep})});
+    var d=await r.json();
+    if(d.success){res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
+    else{res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
+  }catch(e){alert('Erreur réseau');}
+}
+
+async function toggleWf(id,actif){
+  await fetch('/workflow/'+id+'/toggle',{method:'PATCH'});
+  loadWorkflows();
+}
+
+// BROADCASTS
+async function loadBroadcastCount(){
+  try{
+    var r=await fetch('/inbox/contacts/${bot.id}');
+    var d=await r.json();
+    document.getElementById('bc-count').textContent='📊 '+d.total+' contact'+(d.total!==1?'s':'')+' dans votre liste';
+  }catch(e){}
+}
+
+async function sendBroadcast(){
+  var msg=document.getElementById('bc-msg').value.trim();
+  var res=document.getElementById('bc-result');
+  var btn=document.getElementById('bc-btn');
+  if(!msg){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez un message';return;}
+  if(!confirm('Envoyer ce message à tous vos contacts?'))return;
+  btn.disabled=true;btn.textContent='⏳ Envoi en cours...';
+  try{
+    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',message:msg})});
+    var d=await r.json();
+    res.style.display='block';
+    if(d.success){res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Envoyé à '+d.sent+' contacts!'+(d.failed>0?' ('+d.failed+' échecs)':'');document.getElementById('bc-msg').value='';}
+    else{res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
+  }catch(e){alert('Erreur réseau');}
+  btn.disabled=false;btn.textContent='📣 Envoyer à tous mes contacts';
+}
+
+// Charge workflows et broadcast count au démarrage
+loadWorkflows();
+loadBroadcastCount();
+
 function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');if(id==='rdv')loadRdvSemaine();}
 function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
 function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
@@ -2261,6 +2770,17 @@ textarea{min-height:80px;resize:vertical}
         <div class="n" data-val="auto-ecole" onclick="selN(this)"><span class="ne">🚗</span><div class="nn">Auto-école</div></div>
         <div class="n" data-val="pharmacie" onclick="selN(this)"><span class="ne">💊</span><div class="nn">Pharmacie</div></div>
         <div class="n" data-val="traiteur" onclick="selN(this)"><span class="ne">🍲</span><div class="nn">Traiteur</div></div>
+        <div class="n" data-val="assurance" onclick="selN(this)"><span class="ne">🛡️</span><div class="nn">Assurance</div></div>
+        <div class="n" data-val="banque" onclick="selN(this)"><span class="ne">🏦</span><div class="nn">Banque/Finance</div></div>
+        <div class="n" data-val="hotel" onclick="selN(this)"><span class="ne">🏨</span><div class="nn">Hôtel</div></div>
+        <div class="n" data-val="transport" onclick="selN(this)"><span class="ne">🚕</span><div class="nn">Transport</div></div>
+        <div class="n" data-val="education" onclick="selN(this)"><span class="ne">📚</span><div class="nn">Éducation</div></div>
+        <div class="n" data-val="fitness" onclick="selN(this)"><span class="ne">💪</span><div class="nn">Fitness/Sport</div></div>
+        <div class="n" data-val="informatique" onclick="selN(this)"><span class="ne">💻</span><div class="nn">Informatique</div></div>
+        <div class="n" data-val="immobilier" onclick="selN(this)"><span class="ne">🏠</span><div class="nn">Immobilier</div></div>
+        <div class="n" data-val="evenement" onclick="selN(this)"><span class="ne">🎉</span><div class="nn">Événementiel</div></div>
+        <div class="n" data-val="boulangerie" onclick="selN(this)"><span class="ne">🥖</span><div class="nn">Boulangerie</div></div>
+        <div class="n" data-val="autre" onclick="selN(this)"><span class="ne">⭐</span><div class="nn">Autre</div></div>
         <div class="n" data-val="immobilier" onclick="selN(this)"><span class="ne">🏠</span><div class="nn">Immobilier</div></div>
         <div class="n" data-val="autre" onclick="selN(this)"><span class="ne">🏢</span><div class="nn">Autre</div></div>
       </div>
@@ -2815,13 +3335,19 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 .address-input{flex:1;border:1.5px solid #d1d5db;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none}
 .address-input:focus{border-color:#0369a1}
 .address-send{background:#0369a1;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
-.catalogue{display:flex;gap:8px;padding:6px 12px;overflow-x:auto;scrollbar-width:none;border-top:1px solid #e5e7eb}
+.catalogue{display:flex;gap:10px;padding:10px 12px;overflow-x:auto;scrollbar-width:none;border-top:1px solid #e5e7eb;background:#fafafa}
 .catalogue::-webkit-scrollbar{display:none}
-.cat-card{min-width:90px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:8px 6px;text-align:center;cursor:pointer;flex-shrink:0}
-.cat-card:active{border-color:${bot.couleur}}
-.cat-emoji{font-size:20px;display:block;margin-bottom:3px}
-.cat-nom{font-size:11px;font-weight:600;color:#111;display:block}
-.cat-prix{font-size:12px;font-weight:700;color:${bot.couleur};display:block;margin-top:1px}
+.cat-card{min-width:130px;max-width:130px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;cursor:pointer;flex-shrink:0;overflow:hidden;transition:all .15s;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.cat-card:active{transform:scale(.97);border-color:${bot.couleur}}
+.cat-card:hover{border-color:${bot.couleur}55;box-shadow:0 4px 12px rgba(0,0,0,.1)}
+.cat-img{width:100%;height:80px;object-fit:cover;display:block;background:#f0f4f1}
+.cat-img-placeholder{width:100%;height:80px;background:linear-gradient(135deg,${bot.couleur}22,${bot.couleur}44);display:flex;align-items:center;justify-content:center;font-size:32px}
+.cat-body{padding:8px}
+.cat-nom{font-size:12px;font-weight:700;color:#111;display:block;line-height:1.3;margin-bottom:3px}
+.cat-desc-small{font-size:10px;color:#9ab0a0;display:block;margin-bottom:5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.cat-footer{display:flex;align-items:center;justify-content:space-between}
+.cat-prix{font-size:13px;font-weight:800;color:${bot.couleur}}
+.cat-add{width:22px;height:22px;border-radius:50%;background:${bot.couleur};border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700}
 .rating-stars{display:flex;justify-content:center;gap:8px;padding:8px;border-top:1px solid #e5e7eb}
 .star-btn{font-size:26px;background:none;border:none;cursor:pointer}
 .qr{padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;background:#fff;border-top:1px solid #e5e7eb;flex-shrink:0}
@@ -3235,11 +3761,20 @@ function renderCat(items){
   el.style.display='flex';el.innerHTML='';
   items.forEach(function(item){
     var c=document.createElement('div');c.className='cat-card';
-    var imgHtml=item.image?'<img src="'+item.image+'" style="width:100%;height:60px;object-fit:cover;border-radius:8px 8px 0 0;display:block;margin:-8px -6px 6px;width:calc(100% + 12px)" alt="'+item.nom+'"/>'
-      :'<span class="cat-emoji">'+(item.emoji||'🛍️')+'</span>';
-    var descHtml=item.desc?'<span style="font-size:10px;color:#9ab0a0;display:block;margin-top:1px">'+item.desc+'</span>':'';
-    c.innerHTML=imgHtml+'<span class="cat-nom">'+item.nom+'</span>'+descHtml+'<span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>';
+    var imgHtml=item.image
+      ?'<img src="'+item.image+'" class="cat-img" alt="'+item.nom+'" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'"/><div class="cat-img-placeholder" style="display:none">'+(item.emoji||'🛍️')+'</div>'
+      :'<div class="cat-img-placeholder">'+(item.emoji||'🛍️')+'</div>';
+    var descHtml=item.desc?'<span class="cat-desc-small">'+item.desc+'</span>':'';
+    c.innerHTML=imgHtml
+      +'<div class="cat-body">'
+      +'<span class="cat-nom">'+item.nom+'</span>'
+      +descHtml
+      +'<div class="cat-footer">'
+      +'<span class="cat-prix">'+item.prix.toLocaleString('fr-FR')+' F</span>'
+      +'<button class="cat-add" onclick="event.stopPropagation()">+</button>'
+      +'</div></div>';
     c.onclick=function(){send('Je veux commander '+item.nom);};
+    c.querySelector('.cat-add').onclick=function(e){e.stopPropagation();send('Je veux commander '+item.nom);};
     el.appendChild(c);
   });
 }
@@ -3656,19 +4191,7 @@ app.patch('/admin/bot/:id/toggle', async (req, res) => {
 // ============================================
 // AUTH — Login / Register / My bots
 // ============================================
-function generateToken(userId) {
-  const payload = Buffer.from(JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 })).toString('base64');
-  const sig = Buffer.from(userId + CONFIG.JWT_SECRET).toString('base64').substring(0,16);
-  return `${payload}.${sig}`;
-}
-function verifyToken(token) {
-  try {
-    const [payload] = (token||'').split('.');
-    const data = JSON.parse(Buffer.from(payload, 'base64').toString());
-    if (data.exp < Date.now()) return null;
-    return data.userId;
-  } catch(e) { return null; }
-}
+// (generateToken et verifyToken définis plus haut)
 
 app.get('/login', (req, res) => {
   const error = req.query.error;
@@ -3837,7 +4360,9 @@ body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
 // Récupère token Google depuis URL (après OAuth callback) — AVANT tout
 var params=new URLSearchParams(window.location.search);
 if(params.get('token')){
-  localStorage.setItem('sb-token', params.get('token'));
+  // Décode le token (encodeURIComponent côté serveur)
+  var rawToken = decodeURIComponent(params.get('token'));
+  localStorage.setItem('sb-token', rawToken);
   try{ localStorage.setItem('sb-user', JSON.stringify(JSON.parse(decodeURIComponent(params.get('user')||'{}')))); }catch(e){}
   window.history.replaceState({},'','/app');
 }
@@ -3897,8 +4422,8 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'8.0', status:'active',
-  features:['multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
+  app:'🤖 SamaBot IA', version:'9.0', status:'active',
+  features:['broadcasts','inbox-unifiee','workflow-automation','multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
 app.get('/privacy', (req,res) => res.send('<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px"><h1 style="color:#00c875">Politique de confidentialité — SamaBot</h1><p style="margin-top:16px;line-height:1.7">SamaBot collecte uniquement les messages nécessaires au fonctionnement du chatbot. Contact: gakououssou@gmail.com</p></body></html>'));
