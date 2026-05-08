@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -29,6 +28,8 @@ const CONFIG = {
   GOOGLE_CLIENT_ID:     process.env.GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
 };
+
+const appPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}\nnav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}\n.logo b{color:#00c875}\n.wrap{max-width:960px;margin:0 auto;padding:32px 20px}\nh1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}\n.sub{font-size:14px;color:#5a7060;margin-bottom:28px}\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}\n.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb;transition:all .2s}\n.card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}\n.ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}\n.av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}\n.cn{font-size:15px;font-weight:700;color:#0a1a0f}\n.cni{font-size:12px;color:#5a7060;text-transform:capitalize}\n.cb{display:flex;gap:6px}\n.ba{flex:1;padding:9px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;text-align:center;border:none;cursor:pointer;display:block;transition:opacity .15s}\n.ba:hover{opacity:.85}\n.bg{background:#00c875;color:#fff}\n.bo{background:#f0f4f1;color:#0a1a0f}\n.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;text-align:center;cursor:pointer;background:#f9fdf9;transition:all .2s}\n.add:hover{border-color:#00c875;background:rgba(0,200,117,.04)}\n.empty{text-align:center;padding:40px;color:#9ab0a0;font-size:14px}\n.deco{background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.15);border-radius:8px;padding:8px 16px;color:rgba(255,255,255,.8);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s}\n.deco:hover{background:rgba(255,255,255,.15);color:#fff}\n.pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}\n</style>\n</head>\n<body>\n<nav>\n  <div class=\"logo\">Sama<b>Bot</b></div>\n  <button class=\"deco\" id=\"deco\">Deconnexion</button>\n</nav>\n<div class=\"wrap\">\n  <h1>Mes bots</h1>\n  <div class=\"sub\" id=\"info\">Chargement...</div>\n  <div class=\"grid\" id=\"grid\"><div class=\"empty\">Chargement...</div></div>\n</div>\n<script>\n// 1. Logout\ndocument.getElementById('deco').onclick = function() {\n  localStorage.removeItem('sb-token');\n  localStorage.removeItem('sb-user');\n  fetch('/auth/logout', { method: 'POST' }).finally(function() {\n    window.location.replace('/login');\n  });\n};\n\n// 2. Recupere token depuis URL (Google OAuth / reset-password)\n(function() {\n  var hrf = window.location.href;\n  var tm = hrf.match(/[?&]token=([^&]+)/);\n  if (tm && tm[1]) {\n    localStorage.setItem('sb-token', tm[1]);\n    var um = hrf.match(/[?&]user=([^&]+)/);\n    if (um && um[1]) {\n      try { localStorage.setItem('sb-user', decodeURIComponent(um[1])); } catch(e) {}\n    }\n    history.replaceState({}, '', '/app');\n  }\n})();\n\n// 3. Verifie token via API avant d'afficher\nvar tk = localStorage.getItem('sb-token');\nif (!tk) {\n  window.location.replace('/login');\n} else {\n  // Valide le token cote serveur\n  fetch('/auth/test', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) { return r.json(); })\n    .then(function(d) {\n      if (!d.valid) {\n        localStorage.removeItem('sb-token');\n        localStorage.removeItem('sb-user');\n        window.location.replace('/login');\n        return;\n      }\n      // Token valide - charge les bots\n      loadBots();\n    })\n    .catch(function() {\n      loadBots(); // En cas d'erreur reseau, essaie quand meme\n    });\n}\n\nfunction loadBots() {\n  var grid = document.getElementById('grid');\n  var info = document.getElementById('info');\n  var tk = localStorage.getItem('sb-token');\n\n  fetch('/auth/my-bots', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) {\n      if (r.status === 401) {\n        localStorage.removeItem('sb-token');\n        window.location.replace('/login');\n        return null;\n      }\n      return r.json();\n    })\n    .then(function(bots) {\n      if (!bots) return;\n      if (!Array.isArray(bots)) {\n        info.textContent = bots.error || 'Erreur serveur';\n        grid.innerHTML = '<div class=\"empty\">' + (bots.error || 'Erreur') + '</div>';\n        return;\n      }\n      var userRaw = localStorage.getItem('sb-user') || '{}';\n      var user = {};\n      try { user = JSON.parse(userRaw); } catch(e) {}\n      info.innerHTML = '<span class=\"pill\">Plan ' + (user.plan || 'free') + '</span> &nbsp;' + bots.length + ' bot' + (bots.length !== 1 ? 's' : '');\n      var h = '';\n      for (var i = 0; i < bots.length; i++) {\n        var b = bots[i];\n        var av = b.logo_url\n          ? '<img src=\"' + b.logo_url + '\" style=\"width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0\" alt=\"\" />'\n          : '<div class=\"av\" style=\"background:' + (b.couleur || '#00c875') + '\">' + (b.emoji || '?') + '</div>';\n        h += '<div class=\"card\">';\n        h += '<div class=\"ch\">' + av + '<div><div class=\"cn\">' + b.nom + '</div><div class=\"cni\">' + b.niche + '</div></div></div>';\n        h += '<div class=\"cb\">';\n        h += '<a class=\"ba bo\" href=\"/chat/' + b.id + '\" target=\"_blank\">Chat</a>';\n        h += '<a class=\"ba bg\" href=\"/dashboard/' + b.id + '\">Dashboard</a>';\n        h += '</div></div>';\n      }\n      if (!bots.length) {\n        h = '<div class=\"empty\">Pas encore de bot. Creez votre premier bot!</div>';\n      }\n      h += '<div class=\"add\" id=\"addbtn\"><div style=\"font-size:28px;margin-bottom:6px\">+</div><div style=\"font-size:14px;font-weight:600;color:#5a7060\">Nouveau bot</div></div>';\n      grid.innerHTML = h;\n      document.getElementById('addbtn').onclick = function() { window.location.href = '/setup'; };\n    })\n    .catch(function(e) {\n      info.textContent = 'Erreur reseau';\n      grid.innerHTML = '<div class=\"empty\">Impossible de charger. Verifiez votre connexion.</div>';\n    });\n}\n</script>\n</body>\n</html>";
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
 const BUCKET = 'samabot-media';
@@ -164,10 +165,6 @@ const db = {
   insert: (t,d) => sb(t,'POST',d),
   update: (t,d,q) => sb(t,'PATCH',d,q),
 };
-
-function isSupabaseErrorPayload(value) {
-  return !!value && !Array.isArray(value) && typeof value === 'object' && ('message' in value || 'code' in value);
-}
 
 // ============================================
 // SUPABASE STORAGE — Upload fichier
@@ -906,14 +903,13 @@ textarea.b-msg:focus{border-color:#00c875}
 <div class="inbox-wrap">
   <div class="conv-list" id="conv-list">
     ${convs?.length ? convs.map(c => `
-    <div class="conv-item" onclick="loadConv('${c.id}','${c.session_id||''}',this)">
+    <div class="conv-item" data-session="${c.session_id||''}" onclick="loadConv('${c.id}','${c.session_id||''}',this)">
       <div class="conv-ava">${c.session_id?.charAt(0)?.toUpperCase()||'?'}</div>
       <div style="flex:1;min-width:0">
         <div class="conv-name">${c.session_id||'Visiteur'}</div>
         <div class="conv-preview">Cliquez pour voir les messages</div>
         <div class="conv-time">${new Date(c.last_message_at||c.created_at).toLocaleString('fr-FR')}</div>
       </div>
-      <div class="conv-ava" style="width:8px;height:8px;background:#00c875;border-radius:50%;margin-top:6px"></div>
     </div>`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
   </div>
 
@@ -940,7 +936,7 @@ textarea.b-msg:focus{border-color:#00c875}
 </div>
 
 <script>
-var botId = '${bot.id}';
+var botId = "${bot.id}";
 var currentConvId = null;
 
 async function loadConv(convId, sessionId, el) {
@@ -975,8 +971,10 @@ async function sendReply(){
   if(!msg||!currentConvId)return;
   input.value='';
   try{
-    await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg,sessionId:currentConvId,fromDashboard:true})});
-    // Reload messages
+    // Use the session_id stored in data attribute, not the conv id
+    var convItem = document.querySelector('.conv-item.active');
+    var sessionId = convItem ? convItem.getAttribute('data-session') : currentConvId;
+    await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg,sessionId:sessionId})});
     var btn=document.querySelector('.conv-item.active');
     if(btn)btn.click();
   }catch(e){alert('Erreur envoi');}
@@ -1084,7 +1082,7 @@ app.delete('/workflow/:id', async (req, res) => {
 async function runWorkflows(botId, message, sessionId) {
   try {
     const workflows = await db.select('workflows', `?bot_id=eq.${botId}&actif=eq.true`);
-    if (!workflows?.length) return null;
+    if (!workflows?.length || !Array.isArray(workflows)) return null;
 
     const msgLower = message.toLowerCase();
 
@@ -1146,61 +1144,41 @@ app.post('/avis', async (req, res) => {
 // AUTH CLIENTS — Login / Register simple
 // ============================================
 
-function base64UrlEncode(input) {
-  return Buffer.from(input).toString('base64url');
-}
+// Simple token generator (sans dépendance externe)
+const crypto = require('crypto');
 
-function base64UrlDecode(input) {
-  return Buffer.from(input, 'base64url').toString('utf8');
-}
-
-function signTokenParts(headerB64, payloadB64) {
-  return crypto
-    .createHmac('sha256', CONFIG.JWT_SECRET)
-    .update(`${headerB64}.${payloadB64}`)
-    .digest('base64url');
-}
-
-// JWT (HS256) signé sans dépendance externe
 function generateToken(userId) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const headerB64 = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payloadB64 = base64UrlEncode(JSON.stringify({
-    userId,
-    iat: nowSec,
-    exp: nowSec + (30 * 24 * 60 * 60)
-  }));
-  const signature = signTokenParts(headerB64, payloadB64);
-  return `${headerB64}.${payloadB64}.${signature}`;
+  const header = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({userId, exp: Math.floor(Date.now()/1000) + 30*24*60*60})).toString('base64url');
+  const sig = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(header+'.'+payload).digest('base64url');
+  return header+'.'+payload+'.'+sig;
 }
 
 function verifyToken(token) {
   if (!token) return null;
   try {
-    const [headerB64, payloadB64, signature] = token.split('.');
-    if (!headerB64 || !payloadB64 || !signature) return null;
-
-    const expectedSig = signTokenParts(headerB64, payloadB64);
-    const provided = Buffer.from(signature);
-    const expected = Buffer.from(expectedSig);
-    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) return null;
-
-    const data = JSON.parse(base64UrlDecode(payloadB64));
-    if (!data.userId || !data.exp) return null;
-    if (data.exp < Math.floor(Date.now() / 1000)) return null;
+    const parts = (token||'').split('.');
+    if (parts.length !== 3) return null;
+    const [header, payload, sig] = parts;
+    const expected = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(header+'.'+payload).digest('base64url');
+    if (sig !== expected) return null;
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (data.exp < Math.floor(Date.now()/1000)) return null;
     return data.userId;
   } catch(e) { return null; }
 }
 
-function extractBearerToken(req) {
-  const auth = req.headers.authorization || '';
-  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null;
-}
-
-function requireAuth(req, res, next) {
-  const userId = verifyToken(extractBearerToken(req));
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ','');
+  const userId = verifyToken(token);
   if (!userId) return res.status(401).json({ error:'Non autorisé' });
   req.userId = userId;
+  next();
+}
+
+function authOptional(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ','');
+  req.userId = verifyToken(token) || null;
   next();
 }
 
@@ -1307,17 +1285,12 @@ app.post('/auth/login', async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// Mes bots
-app.get('/auth/my-bots', requireAuth, async (req, res) => {
+// Mes bots — protégé par auth
+app.get('/auth/my-bots', authMiddleware, async (req, res) => {
   try {
     const bots = await db.select('bots', `?user_id=eq.${req.userId}&actif=eq.true&order=created_at.desc`);
     res.json(bots||[]);
   } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.post('/auth/logout', (req, res) => {
-  // Token stateless: le client supprime le token local.
-  res.json({ success: true });
 });
 
 // ============================================
@@ -1545,21 +1518,33 @@ async function sendEmail(to, subject, html) {
 // Envoie un vrai message WhatsApp via WaSenderAPI
 async function sendWhatsApp(to, message) {
   if (!CONFIG.WASENDER_API_KEY) {
-    console.log(`📱 WhatsApp simulé → ${to}: ${message.substring(0,60)}...`);
+    console.log(`📱 WhatsApp simulé (pas de WASENDER_API_KEY) → ${to}: ${message.substring(0,60)}...`);
     return false;
   }
   try {
-    const phone = to.replace(/[\s\-()]/g,'').startsWith('+')
-      ? to.replace(/[\s\-()]/g,'')
-      : '+' + to.replace(/[\s\-()]/g,'');
+    // Normalise le numéro: retire espaces/tirets/parenthèses, garde le +
+    let phone = to.replace(/[\s\-()]/g,'');
+    if (!phone.startsWith('+')) phone = '+' + phone;
+
+    const payload = { to: phone, text: message };
+    // Ajoute le session_id si fourni (requis par certains providers WaSender)
+    if (CONFIG.WASENDER_SESSION_ID) {
+      payload.session_id = CONFIG.WASENDER_SESSION_ID;
+      payload.sessionId = CONFIG.WASENDER_SESSION_ID; // certains providers utilisent l'autre nom
+    }
+
     const res = await fetch('https://www.wasenderapi.com/api/send-message', {
       method: 'POST',
-      headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${CONFIG.WASENDER_API_KEY}` },
-      body: JSON.stringify({ to: phone, text: message })
+      headers: {
+        'Content-Type':'application/json',
+        'Authorization':`Bearer ${CONFIG.WASENDER_API_KEY}`,
+        ...(CONFIG.WASENDER_SESSION_ID ? { 'X-Session-Id': CONFIG.WASENDER_SESSION_ID } : {})
+      },
+      body: JSON.stringify(payload)
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (res.ok) { console.log(`📱 WhatsApp envoyé à ${phone} ✅`); return true; }
-    else { console.error(`📱 WhatsApp erreur:`, JSON.stringify(data)); return false; }
+    else { console.error(`📱 WhatsApp erreur (${res.status}):`, JSON.stringify(data).substring(0,200)); return false; }
   } catch(e) { console.error('sendWhatsApp error:', e.message); return false; }
 }
 
@@ -1856,7 +1841,7 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
       console.log(`📦 Commande auto-créée: ${cmd[0].numero} — ${total} FCFA`);
       await notifyPatron(botId, cmd[0]);
       // Confirmation au client si email dispo dans session
-      const sess = sessions.get(sessionId);
+      const sess = sessions[sessionId];
       if (sess?.clientEmail) sendConfirmationClient(botId, cmd[0], sess.clientEmail).catch(()=>{});
       // Met à jour avec infos client extraites des messages
       updateCommandeInfos(cmd[0].id, sessionId, botId).catch(()=>{});
@@ -1869,10 +1854,11 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
 // Extrait et sauvegarde les infos client depuis les messages de la session
 async function updateCommandeInfos(commandeId, sessionId, botId) {
   try {
-    // Récupère les derniers messages de la session
-    const msgs = await db.select('messages',
-      `?bot_id=eq.${botId}&conversation_id=in.(select id from conversations where session_id=eq.${sessionId})&role=eq.user&order=created_at.desc&limit=10`
-    );
+    // Récupère les messages de la session via conversations
+    const convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&select=id`);
+    if (!convs?.length) return;
+    const convId = convs[0].id;
+    const msgs = await db.select('messages', `?conversation_id=eq.${convId}&role=eq.user&order=created_at.desc&limit=10`);
     if (!msgs?.length) return;
 
     const fullText = msgs.map(m=>m.content).join(' ');
@@ -2025,7 +2011,7 @@ app.get('/bot/:id', async (req, res) => {
 // ============================================
 // CRÉER UN BOT
 // ============================================
-app.post('/bot/create', requireAuth, async (req, res) => {
+app.post('/bot/create', async (req, res) => {
   try {
     const { nom, niche, adresse, horaires, services, telephone, paiement, maps_url,
             wave_number, om_number, couleur, email, logo_url, catalogue,
@@ -2046,9 +2032,27 @@ app.post('/bot/create', requireAuth, async (req, res) => {
       livraison_delai: livraison_delai||'30-45 min',
       livraison_zones: livraison_zones||'Dakar',
       livraison_min:   livraison_min||0,
-      user_id: req.userId
+      user_id: '00000000-0000-0000-0000-000000000001' // sera remplacé ci-dessous
     };
     botData.prompt = makePrompt(botData);
+
+    // Priorité: 1) token auth, 2) email fourni, 3) admin fallback
+    const authToken = req.headers.authorization?.replace('Bearer ','');
+    const authUserId = verifyToken(authToken);
+
+    if (authUserId) {
+      // Utilisateur connecté — lie le bot à son compte
+      botData.user_id = authUserId;
+    } else if (email) {
+      // Email fourni — trouve ou crée le user
+      const ex = await db.select('users', `?email=eq.${encodeURIComponent(email)}`);
+      if (!ex?.length) {
+        const nu = await db.insert('users', { email, nom:nom+' (owner)', plan:'starter' });
+        if (nu?.[0]?.id) botData.user_id = nu[0].id;
+      } else {
+        botData.user_id = ex[0].id;
+      }
+    }
 
     await db.insert('bots', botData);
     console.log(`✅ Bot créé: ${nom} (${id})`);
@@ -2172,13 +2176,14 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     ${bot.logo_url?`<img class="bot-logo-sm" src="${bot.logo_url}" alt="${bot.nom}"/>`:`<div class="bot-ava-sm">${bot.emoji}</div>`}
     <span class="bot-nm">${bot.nom}</span>
   </div>
-  <div style="display:flex;align-items:center;gap:8px">
+  <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
     <div class="live"><span class="live-dot"></span>${t(lang,'online')}</div>
     <select onchange="changeLang(this.value)" style="padding:5px 8px;border-radius:8px;border:1px solid #d1e5d8;font-size:12px;font-family:inherit;background:#fff">
       <option value="fr" ${lang==='fr'?'selected':''}>🇫🇷 FR</option>
       <option value="en" ${lang==='en'?'selected':''}>🇬🇧 EN</option>
       <option value="pt" ${lang==='pt'?'selected':''}>🇵🇹 PT</option>
     </select>
+    <a href="/app" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 12px;color:#fff;font-size:12px;font-weight:600;text-decoration:none">← Mes bots</a>
   </div>
 </div>
 
@@ -2187,7 +2192,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <a class="btn btn-p" href="/chat/${bot.id}" target="_blank">💬 Chat</a>
     <a class="btn btn-g" href="/inbox/${bot.id}" target="_blank">📥 Inbox</a>
     <button class="btn btn-g" onclick="copyLink()">🔗 Lien</button>
-    <button class="btn btn-g" onclick="document.getElementById('wm').style.display='flex'">📋 Widget</button>
+    <button class="btn btn-g" onclick="document.getElementById(&quot;wm&quot;).style.display=&quot;flex&quot;">📋 Widget</button>
     <button class="btn btn-g" onclick="location.reload()">🔄</button>
   </div>
 
@@ -2248,7 +2253,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div style="margin-top:16px;display:flex;gap:8px">
           <button class="btn btn-p" onclick="sauvegarderDispo()">💾 Sauvegarder</button>
-          <button class="btn btn-g" onclick="document.getElementById('config-dispo').style.display='none'">Annuler</button>
+          <button class="btn btn-g" onclick="document.getElementById(&quot;config-dispo&quot;).style.display=&quot;none&quot;">Annuler</button>
         </div>
       </div>
     </div>
@@ -2392,7 +2397,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <div class="card">
       <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
         <span>⚡ Workflows automatiques</span>
-        <button class="btn btn-p" style="font-size:11px;padding:6px 12px" onclick="document.getElementById('wf-add').style.display='block'">+ Nouveau</button>
+        <button class="btn btn-p" style="font-size:11px;padding:6px 12px" onclick="document.getElementById(&quot;wf-add&quot;).style.display=&quot;block&quot;">+ Nouveau</button>
       </div>
       <p style="font-size:13px;color:#5a7060;margin-bottom:16px">Réponses automatiques selon les mots-clés ou événements.</p>
 
@@ -2419,7 +2424,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-p" onclick="saveWorkflow()">💾 Sauvegarder</button>
-          <button class="btn btn-g" onclick="document.getElementById('wf-add').style.display='none'">Annuler</button>
+          <button class="btn btn-g" onclick="document.getElementById(&quot;wf-add&quot;).style.display=&quot;none&quot;">Annuler</button>
         </div>
         <div id="wf-result" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px"></div>
       </div>
@@ -2459,7 +2464,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         </div>
         <div>
           <div style="font-size:12px;font-weight:600;color:#5a7060;margin-bottom:3px">Widget site web</div>
-          <div class="copy-area" id="wcode-inline">&lt;script&gt;window.SamaBotConfig={botId:'${bot.id}',couleur:'${bot.couleur}'}&lt;/script&gt;&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
+          <div class="copy-area" id="wcode-inline">&lt;script&gt;window.SamaBotConfig={botId:BID,couleur:BCOL}&lt;/script&gt;&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
           <button class="cp" onclick="copyWidget()">📋 Copier widget</button>
         </div>
       </div>
@@ -2505,38 +2510,40 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 <div id="wm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:#fff;border-radius:16px;padding:22px;max-width:480px;width:100%">
     <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:14px">📋 Code widget</div>
-    <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId: '${bot.id}', couleur: '${bot.couleur}' };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
+    <div class="copy-area">&lt;script&gt;\n  window.SamaBotConfig = { botId:BID, couleur: BCOL };\n&lt;/script&gt;\n&lt;script src="${CONFIG.BASE_URL}/widget.js" async&gt;&lt;/script&gt;</div>
     <button class="cp" onclick="copyWidget()">📋 Copier</button>
-    <button onclick="document.getElementById('wm').style.display='none'" style="margin-left:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a7060">Fermer</button>
+    <button onclick="document.getElementById(&quot;wm&quot;).style.display=&quot;none&quot;" style="margin-left:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a7060">Fermer</button>
   </div>
 </div>
 
 <script>
+var BID = '${bot.id}';
+var BCOL = '${bot.couleur}';
 async function importCatalogue(){
   var url=document.getElementById('imp-url').value.trim();
   var type=document.getElementById('imp-type').value;
   var key=document.getElementById('imp-key').value.trim();
   var res=document.getElementById('imp-result');
   var btn=document.getElementById('imp-btn');
-  if(!url){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez une URL';return;}
+  if(!url){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez une URL';return;}
   btn.disabled=true;btn.textContent='⏳ Import en cours...';
-  res.style.display='none';
+  res.style.display="none";
   try{
-    var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',url,type,apiKey:key||undefined})});
+    var r=await fetch('/import/catalogue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,url,type,apiKey:key||undefined})});
     var d=await r.json();
     if(d.success){
-      res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';
+      res.style.display="block";res.style.background='#dcfce7';res.style.color='#166534';
       res.textContent='✅ '+d.count+' produits importés! Rechargement...';
       setTimeout(()=>location.reload(),2000);
     }else{
-      res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+      res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';
       res.textContent='❌ '+( d.error||'Erreur import')+'. '+(d.tip||'');
     }
-  }catch(e){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ Erreur réseau';}
+  }catch(e){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='❌ Erreur réseau';}
   btn.disabled=false;btn.textContent='🔄 Importer le catalogue';
 }
 
-function changeLang(l){window.location.href='/dashboard/${bot.id}?lang='+l;}
+function changeLang(l){window.location.href='/dashboard/'+BID+'?lang='+l;}
 
 // WORKFLOWS
 function toggleWfVal(){
@@ -2547,16 +2554,16 @@ toggleWfVal();
 
 async function loadWorkflows(){
   try{
-    var r=await fetch('/workflow/${bot.id}');
+    var r=await fetch('/workflow/'+BID);
     var wfs=await r.json();
     var el=document.getElementById('wf-list');
     if(!wfs.length){el.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:13px;padding:20px">Aucun workflow. Créez le premier!</div>';return;}
     el.innerHTML=wfs.map(w=>'<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f4f1">'
       +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#0a1a0f">'+w.nom+'</div>'
       +'<div style="font-size:11px;color:#9ab0a0;margin-top:2px">'+w.trigger_type+(w.trigger_valeur?' → "'+w.trigger_valeur+'"':'')+'</div>'
-      +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'...</div></div>'
+      +'<div style="font-size:12px;color:#5a7060;margin-top:3px">'+w.action_reponse.substring(0,60)+'\u2026</div></div>'
       +'<div style="display:flex;gap:6px">'
-      +'<button onclick="toggleWf(\''+w.id+'\','+w.actif+')" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
+      +'<button data-wid="'+w.id+'" data-actif="'+w.actif+'" onclick="toggleWf(this.dataset.wid,this.dataset.actif==String(true))" style="padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:'+(w.actif?'#dcfce7':'#f0f4f1')+';color:'+(w.actif?'#166534':'#9ab0a0')+'">'+(w.actif?'✅ Actif':'⭕ Inactif')+'</button>'
       +'</div></div>').join('');
   }catch(e){document.getElementById('wf-list').innerHTML='<div style="color:#ef4444;font-size:13px">Erreur chargement</div>';}
 }
@@ -2567,12 +2574,12 @@ async function saveWorkflow(){
   var val=document.getElementById('wf-val').value.trim();
   var rep=document.getElementById('wf-rep').value.trim();
   var res=document.getElementById('wf-result');
-  if(!nom||!rep){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
+  if(!nom||!rep){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Remplissez le nom et la réponse';return;}
   try{
-    var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',nom,trigger,valeur:val,reponse:rep})});
+    var r=await fetch('/workflow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,nom,trigger,valeur:val,reponse:rep})});
     var d=await r.json();
-    if(d.success){res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
-    else{res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
+    if(d.success){res.style.display="block";res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Workflow créé!';loadWorkflows();document.getElementById('wf-nom').value='';document.getElementById('wf-rep').value='';}
+    else{res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
   }catch(e){alert('Erreur réseau');}
 }
 
@@ -2584,7 +2591,7 @@ async function toggleWf(id,actif){
 // BROADCASTS
 async function loadBroadcastCount(){
   try{
-    var r=await fetch('/inbox/contacts/${bot.id}');
+    var r=await fetch('/inbox/contacts/'+BID);
     var d=await r.json();
     document.getElementById('bc-count').textContent='📊 '+d.total+' contact'+(d.total!==1?'s':'')+' dans votre liste';
   }catch(e){}
@@ -2594,27 +2601,18 @@ async function sendBroadcast(){
   var msg=document.getElementById('bc-msg').value.trim();
   var res=document.getElementById('bc-result');
   var btn=document.getElementById('bc-btn');
-  if(!msg){res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez un message';return;}
+  if(!msg){res.style.display="block";res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Entrez un message';return;}
   if(!confirm('Envoyer ce message à tous vos contacts?'))return;
   btn.disabled=true;btn.textContent='⏳ Envoi en cours...';
   try{
-    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',message:msg})});
+    var r=await fetch('/broadcast/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,message:msg})});
     var d=await r.json();
-    res.style.display='block';
+    res.style.display="block";
     if(d.success){res.style.background='#dcfce7';res.style.color='#166534';res.textContent='✅ Envoyé à '+d.sent+' contacts!'+(d.failed>0?' ('+d.failed+' échecs)':'');document.getElementById('bc-msg').value='';}
     else{res.style.background='#fee2e2';res.style.color='#dc2626';res.textContent='Erreur: '+d.error;}
   }catch(e){alert('Erreur réseau');}
   btn.disabled=false;btn.textContent='📣 Envoyer à tous mes contacts';
 }
-
-// Charge workflows et broadcast count au démarrage
-loadWorkflows();
-loadBroadcastCount();
-
-function showTab(id,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active');if(id==='rdv')loadRdvSemaine();}
-function copyLink(){navigator.clipboard.writeText('${CONFIG.BASE_URL}/chat/${bot.id}').then(()=>alert('✅ Lien copié!'));}
-function copyWidget(){navigator.clipboard.writeText('<script>\\nwindow.SamaBotConfig={botId:\\'${bot.id}\\',couleur:\\'${bot.couleur}\\'};\\n<\\/script>\\n<script src="${CONFIG.BASE_URL}/widget.js" async><\\/script>').then(()=>alert('✅ Code copié!'));}
-async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});setTimeout(()=>location.reload(),500);}
 
 // ============================================
 // RDV JavaScript
@@ -2622,13 +2620,13 @@ async function updateStatut(id,s){await fetch('/commande/'+id+'/statut',{method:
 var rdvDateSelectionnee = new Date().toISOString().split('T')[0];
 
 async function loadRdvSemaine(){
-  const r = await fetch('/rdv/semaine/${bot.id}');
+  const r = await fetch('/rdv/semaine/'+BID);
   const data = await r.json();
   const el = document.getElementById('rdv-semaine');
   el.innerHTML = '';
   data.jours.forEach(j => {
     const btn = document.createElement('button');
-    btn.style.cssText = 'min-width:80px;padding:10px 8px;border-radius:10px;border:1.5px solid '+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#d1e5d8')+';background:'+(j.date===rdvDateSelectionnee?'${bot.couleur}':'#fff')+';cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0';
+    btn.style.cssText = 'min-width:80px;padding:10px 8px;border-radius:10px;border:1.5px solid '+(j.date===rdvDateSelectionnee?BCOL:'#d1e5d8')+';background:'+(j.date===rdvDateSelectionnee?BCOL:'#fff')+';cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0';
     btn.innerHTML = '<div style="font-size:11px;font-weight:600;color:'+(j.date===rdvDateSelectionnee?'#fff':'#5a7060')+'">'+j.label+'</div><div style="font-size:16px;font-weight:800;color:'+(j.ferme?'#ccc':(j.date===rdvDateSelectionnee?'#fff':'#0a1a0f'))+'">'+(!j.ferme?j.creneauxDispo:'—')+'</div><div style="font-size:10px;color:'+(j.date===rdvDateSelectionnee?'rgba(255,255,255,.7)':'#9ab0a0')+'">'+(j.ferme?'Fermé':j.creneauxDispo+' libres')+'</div>';
     if(!j.ferme){btn.onclick=()=>{rdvDateSelectionnee=j.date;loadRdvSemaine();loadRdvListe(j.date);};}
     el.appendChild(btn);
@@ -2636,40 +2634,26 @@ async function loadRdvSemaine(){
   loadRdvListe(rdvDateSelectionnee);
 
   // RDV du jour pour le stat
-  const today = await fetch('/rdv/today/${bot.id}').then(r=>r.json());
+  const today = await fetch('/rdv/today/'+BID).then(r=>r.json());
   document.getElementById('rdv-today-count').textContent = today.length || '0';
 }
 
 async function loadRdvListe(date){
-  const r = await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const r = await fetch('/rdv/creneaux/'+BID+'?date='+date);
   const data = await r.json();
   const el = document.getElementById('rdv-liste');
-
-  if(data.ferme){
-    el.innerHTML = '<div class="empty">'+data.message+'</div>';
-    return;
-  }
-
-  const rdvsConfirmes = await fetch('/rdv/semaine/${bot.id}').then(r=>r.json());
-
-  // Récupère les RDV confirmés pour cette date
-  const rdvsDate = await fetch('/rdv/creneaux/${bot.id}?date='+date).then(r=>r.json());
-
+  if(data.ferme){el.innerHTML='<div class="empty">'+data.message+'</div>';return;}
   const dateLabel = new Date(date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
-  el.innerHTML = '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
-
+  el.innerHTML='<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
   if(!data.creneaux?.length){el.innerHTML+='<div class="empty">Aucun créneau ce jour</div>';return;}
-
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px';
-
-  data.creneaux.forEach(c => {
-    const btn = document.createElement('div');
-    btn.style.cssText = 'padding:10px;border-radius:8px;text-align:center;border:1.5px solid '+(c.disponible?'#d1e5d8':'#fee2e2')+';background:'+(c.disponible?'#fff':'#fef2f2');
-    btn.innerHTML = '<div style="font-size:14px;font-weight:700;color:'+(c.disponible?'#0a1a0f':'#ef4444')+'">'+c.heure+'</div><div style="font-size:10px;color:'+(c.disponible?'#00c875':'#ef4444');'font-weight:600;margin-top:2px">'+(c.disponible?'Libre':'Pris')+'</div>';
+  const grid=document.createElement('div');
+  grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px';
+  data.creneaux.forEach(function(c){
+    var btn=document.createElement('div');
+    btn.style.cssText='padding:10px;border-radius:8px;text-align:center;border:1.5px solid '+(c.disponible?'#d1e5d8':'#fee2e2')+';background:'+(c.disponible?'#fff':'#fef2f2');
+    btn.innerHTML='<div style="font-size:14px;font-weight:700;color:'+(c.disponible?'#0a1a0f':'#ef4444')+'">'+c.heure+'</div><div style="font-size:10px;color:'+(c.disponible?'#00c875':'#ef4444')+';font-weight:600;margin-top:2px">'+(c.disponible?'Libre':'Pris')+'</div>';
     grid.appendChild(btn);
   });
-
   el.appendChild(grid);
 }
 
@@ -2688,15 +2672,36 @@ async function sauvegarderDispo(){
     slot: parseInt(document.getElementById('slot-'+(i+1))?.value || '60')
   })).filter(d => d.actif);
 
-  await fetch('/rdv/disponibilites/${bot.id}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
+  await fetch('/rdv/disponibilites/'+BID,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disponibilites})});
   alert('✅ Horaires sauvegardés!');
-  document.getElementById('config-dispo').style.display='none';
+  document.getElementById('config-dispo').style.display="none";
   loadRdvSemaine();
 }
 
 // Charge les RDV au démarrage
 loadRdvSemaine();
 setTimeout(()=>location.reload(),60000);
+
+function showTab(id,btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  btn.classList.add('active');
+  if(id==='rdv') loadRdvSemaine();
+}
+function copyLink(){
+  navigator.clipboard.writeText(location.origin+'/chat/'+BID).then(function(){alert('Lien copie!');});
+}
+function copyWidget(){
+  var t = document.getElementById('wcode-inline');
+  if(t){ navigator.clipboard.writeText(t.textContent).then(function(){alert('Code copie!');}); }
+}
+async function updateStatut(id,s){
+  await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});
+  setTimeout(function(){location.reload();},500);
+}
+loadWorkflows();
+loadBroadcastCount();
 </script>
 </body></html>`);
   } catch(e) { res.status(500).send('Erreur: '+e.message); }
@@ -3031,11 +3036,9 @@ function cp(id){
 async function create(){
   var nom=document.getElementById('nom').value.trim();
   if(!nom){alert('⚠️ Entrez le nom de votre business');return;}
-  var token = localStorage.getItem('sb-token');
-  if(!token){ window.location.href='/login'; return; }
   var btn=document.getElementById('sbtn');btn.textContent='⏳ Création...';btn.disabled=true;
   try{
-    var r=await fetch('/bot/create',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({
+    var r=await fetch('/bot/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       nom,niche:nv,
       logo_url:document.getElementById('logo-url').value||null,
       adresse:document.getElementById('adr').value,
@@ -3488,6 +3491,7 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 <script>
 var sid='p_'+Math.random().toString(36).substr(2,9);
 var botId='${req.params.botId}';
+var BID=botId;
 var logoSrc='${bot.logo_url||''}';
 var botEmoji='${bot.emoji}';
 var isRec=false,mediaRec=null,audioChunks=[];
@@ -3540,7 +3544,7 @@ function renderActions(actions){
       return;
     }
     if(a.type==='rating'){showRating();return;}
-    if(a.type==='share'){var b=document.createElement('button');b.className='act act-share';b.textContent=a.label;b.onclick=function(){if(navigator.share)navigator.share({title:'${bot.nom}',url:window.location.href});else{navigator.clipboard.writeText(window.location.href);alert('✅ Lien copié!');}};el.appendChild(b);return;}
+    if(a.type==='share'){var b=document.createElement('button');b.className='act act-share';b.textContent=a.label;b.onclick=function(){if(navigator.share)navigator.share({title:"${bot.nom}",url:window.location.href});else{navigator.clipboard.writeText(window.location.href);alert('✅ Lien copié!');}};el.appendChild(b);return;}
     if(a.type==='cash'){var b=document.createElement('button');b.className='act act-cash';b.textContent=a.label;b.onclick=function(){addMsg('✅ Paiement à la livraison noté! Votre commande est confirmée.',false);el.innerHTML='';};el.appendChild(b);return;}
     if(!a.url&&a.type==='hours'){var s=document.createElement('span');s.className='act act-hours';s.textContent=a.label;el.appendChild(s);return;}
     if(a.url){var l=document.createElement('a');l.className='act act-'+a.type;l.textContent=a.label;l.href=a.url;l.target='_blank';l.rel='noopener';el.appendChild(l);}
@@ -3559,7 +3563,7 @@ async function ouvrirRdv(){
 function fermerRdv(){document.getElementById('rdv-modal').style.display='none';rdvDateSel=null;rdvHeureSel=null;}
 
 async function chargerSemaineRdv(){
-  const r=await fetch('/rdv/semaine/${bot.id}');
+  const r=await fetch('/rdv/semaine/'+BID);
   const data=await r.json();
   const el=document.getElementById('rdv-days');
   el.innerHTML='';
@@ -3573,7 +3577,7 @@ async function chargerSemaineRdv(){
 }
 
 async function chargerCreneaux(date){
-  const r=await fetch('/rdv/creneaux/${bot.id}?date='+date);
+  const r=await fetch('/rdv/creneaux/'+BID+'?date='+date);
   const data=await r.json();
   const el=document.getElementById('rdv-slots');
   el.innerHTML='';
@@ -3594,7 +3598,7 @@ async function confirmerRdv(){
   var btn=document.getElementById('rdv-confirm-btn');
   btn.textContent='⏳ Confirmation...';btn.disabled=true;
   try{
-    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:'${bot.id}',sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,clientEmail:document.getElementById('rdv-email')?.value||'',service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
+    var r=await fetch('/rdv/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId:BID,sessionId:sid,clientNom:nom,clientTel:document.getElementById('rdv-tel').value,clientEmail:document.getElementById('rdv-email')?.value||'',service:document.getElementById('rdv-service').value||'RDV',date:rdvDateSel,heure:rdvHeureSel})});
     var data=await r.json();
     if(data.success){
       fermerRdv();
@@ -3950,266 +3954,18 @@ function send(t){
 // ADMIN DASHBOARD — Interface complète
 // ============================================
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'samabot_admin_2025';
+const adminPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot Admin</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#0a0a0a;color:#fff;min-height:100vh}\n.nav{background:#111;border-bottom:1px solid #222;padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800}.logo span{color:#00c875}\n.badge{background:#00c875;color:#000;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:800;margin-left:8px}\n.wrap{max-width:1200px;margin:0 auto;padding:28px 20px}\n.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px}\n.kpi{background:#111;border:1px solid #222;border-radius:12px;padding:20px}\n.kpi-val{font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:#00c875;line-height:1}\n.kpi-lbl{font-size:12px;color:#666;margin-top:6px}\n.tabs{display:flex;gap:0;border-bottom:1px solid #222;margin-bottom:20px}\n.tab{padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;color:#666;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}\n.tab.active{color:#00c875;border-bottom-color:#00c875}\n.tc{display:none}.tc.active{display:block}\n.table{width:100%;border-collapse:collapse}\n.table th{background:#111;border:1px solid #222;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666;text-align:left;font-weight:600}\n.table td{border:1px solid #1a1a1a;padding:10px 12px;font-size:13px;color:#ccc;vertical-align:top}\n.table tr:hover td{background:#111}\n.pill{border-radius:20px;padding:2px 8px;font-size:10px;font-weight:800;display:inline-block}\n.p-free{background:#222;color:#666}\n.p-starter{background:#1a2e1a;color:#00c875}\n.p-pro{background:#1a1a2e;color:#6366f1}\n.p-business{background:#2e1a1a;color:#f59e0b}\n.search{background:#111;border:1px solid #333;border-radius:8px;padding:8px 14px;font-size:13px;color:#fff;font-family:inherit;outline:none;width:240px}\n.search:focus{border-color:#00c875}\n.fb{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px}\n.ab{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;color:#ccc;cursor:pointer;font-family:inherit}\n.ab:hover{border-color:#00c875;color:#00c875}\n.msg{background:#1a1a1a;border-radius:8px;padding:8px 10px;font-size:12px;color:#999;max-width:400px;line-height:1.4}\n</style>\n</head>\n<body>\n<div class=\"nav\">\n  <div><span class=\"logo\">Sama<span>Bot</span></span><span class=\"badge\">ADMIN</span></div>\n  <div style=\"font-size:12px;color:#444\" id=\"ref\">Chargement...</div>\n</div>\n<div class=\"wrap\">\n  <div class=\"kpis\">\n    <div class=\"kpi\"><div class=\"kpi-val\" id=\"k-u\">-</div><div class=\"kpi-lbl\">Clients</div></div>\n    <div class=\"kpi\"><div class=\"kpi-val\" id=\"k-b\">-</div><div class=\"kpi-lbl\">Bots actifs</div></div>\n    <div class=\"kpi\"><div class=\"kpi-val\" id=\"k-m\">-</div><div class=\"kpi-lbl\">Msgs aujourd_hui</div></div>\n    <div class=\"kpi\"><div class=\"kpi-val\" id=\"k-o\">-</div><div class=\"kpi-lbl\">Commandes</div></div>\n    <div class=\"kpi\"><div class=\"kpi-val\" id=\"k-r\">-</div><div class=\"kpi-lbl\">Revenus</div></div>\n  </div>\n  <div class=\"tabs\">\n    <div class=\"tab active\" onclick=\"st('clients',this)\">Clients</div>\n    <div class=\"tab\" onclick=\"st('bots',this)\">Bots</div>\n    <div class=\"tab\" onclick=\"st('cmds',this)\">Commandes</div>\n    <div class=\"tab\" onclick=\"st('msgs',this)\">Messages</div>\n  </div>\n  <div id=\"tc-clients\" class=\"tc active\">\n    <div class=\"fb\"><b style=\"color:#fff\">Tous les clients</b><input class=\"search\" placeholder=\"Rechercher...\" oninput=\"ft('t-cl',this.value)\"/></div>\n    <table class=\"table\" id=\"t-cl\"><thead><tr><th>Client</th><th>Email</th><th>Plan</th><th>Bots</th><th>Inscrit le</th><th>Actions</th></tr></thead><tbody id=\"b-cl\"><tr><td colspan=\"6\" style=\"text-align:center;color:#444\">Chargement...</td></tr></tbody></table>\n  </div>\n  <div id=\"tc-bots\" class=\"tc\">\n    <div class=\"fb\"><b style=\"color:#fff\">Tous les bots</b><input class=\"search\" placeholder=\"Rechercher...\" oninput=\"ft('t-bo',this.value)\"/></div>\n    <table class=\"table\" id=\"t-bo\"><thead><tr><th>Bot</th><th>Niche</th><th>Owner</th><th>Msgs</th><th>Cmds</th><th>Cree le</th><th>Actions</th></tr></thead><tbody id=\"b-bo\"><tr><td colspan=\"7\" style=\"text-align:center;color:#444\">Chargement...</td></tr></tbody></table>\n  </div>\n  <div id=\"tc-cmds\" class=\"tc\">\n    <div class=\"fb\"><b style=\"color:#fff\">Toutes les commandes</b><input class=\"search\" placeholder=\"Rechercher...\" oninput=\"ft('t-cm',this.value)\"/></div>\n    <table class=\"table\" id=\"t-cm\"><thead><tr><th>Ref</th><th>Bot</th><th>Client</th><th>Total</th><th>Statut</th><th>Date</th></tr></thead><tbody id=\"b-cm\"><tr><td colspan=\"6\" style=\"text-align:center;color:#444\">Chargement...</td></tr></tbody></table>\n  </div>\n  <div id=\"tc-msgs\" class=\"tc\">\n    <b style=\"color:#fff;display:block;margin-bottom:14px\">Messages recents</b>\n    <div id=\"msgs-list\" style=\"display:flex;flex-direction:column;gap:8px\"></div>\n  </div>\n</div>\n<script>\nvar SEC = 'PLACEHOLDER_SECRET';\nvar D = {};\n\nfunction st(id,el){\n  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});\n  document.querySelectorAll('.tc').forEach(function(t){t.classList.remove('active');});\n  el.classList.add('active');\n  document.getElementById('tc-'+id).classList.add('active');\n}\n\nfunction ft(tid,q){\n  var rows=document.querySelectorAll('#'+tid+' tbody tr');\n  q=q.toLowerCase();\n  rows.forEach(function(r){r.style.display=r.textContent.toLowerCase().includes(q)?'':'none';});\n}\n\nfunction pp(plan){\n  var cls={'free':'p-free','starter':'p-starter','pro':'p-pro','business':'p-business'};\n  return '<span class=\"pill '+(cls[plan]||'p-free')+'\">'+(plan||'free').toUpperCase()+'</span>';\n}\n\nfunction ld(){\n  fetch('/admin/stats?secret='+SEC)\n    .then(function(r){\n      if(!r.ok){document.getElementById('ref').textContent='Erreur '+r.status;return null;}\n      return r.json();\n    })\n    .then(function(d){\n      if(!d||!d.stats)return;\n      D=d;\n      document.getElementById('k-u').textContent=d.stats.total_users;\n      document.getElementById('k-b').textContent=d.stats.total_bots;\n      document.getElementById('k-m').textContent=d.stats.messages_today;\n      document.getElementById('k-o').textContent=(d.commandes||[]).length;\n      document.getElementById('k-r').textContent=((d.stats.total_revenue||0)/1000).toFixed(0)+'K F';\n      document.getElementById('ref').textContent='Mis a jour: '+new Date().toLocaleTimeString('fr-FR');\n\n      // CLIENTS\n      var ch='';\n      (d.users||[]).forEach(function(u){\n        var ub=(d.bots||[]).filter(function(b){return b.user_id===u.id;});\n        ch+='<tr>'\n          +'<td><strong style=\"color:#fff\">'+(u.nom||'-')+'</strong></td>'\n          +'<td>'+u.email+'</td>'\n          +'<td>'+pp(u.plan)+'</td>'\n          +'<td>'+ub.length+'</td>'\n          +'<td style=\"color:#444\">'+new Date(u.created_at).toLocaleDateString('fr-FR')+'</td>'\n          +'<td><button class=\"ab\" onclick=\"cp(this)\" data-uid=\"'+u.id+'\">Plan</button></td>'\n          +'</tr>';\n      });\n      document.getElementById('b-cl').innerHTML=ch||'<tr><td colspan=\"6\" style=\"text-align:center;color:#444\">Aucun client</td></tr>';\n\n      // BOTS\n      var bh='';\n      (d.bots||[]).forEach(function(b){\n        var ow=(d.users||[]).find(function(u){return u.id===b.user_id;});\n        var bc=(d.commandes||[]).filter(function(c){return c.bot_id===b.id;});\n        bh+='<tr>'\n          +'<td><strong style=\"color:#fff\">'+b.nom+'</strong></td>'\n          +'<td><span style=\"background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px\">'+b.niche+'</span></td>'\n          +'<td style=\"color:#888\">'+(ow?ow.email:'-')+'</td>'\n          +'<td>'+(b.messages_count||0)+'</td>'\n          +'<td>'+bc.length+'</td>'\n          +'<td style=\"color:#444\">'+new Date(b.created_at).toLocaleDateString('fr-FR')+'</td>'\n          +'<td>'\n            +'<a href=\"/dashboard/'+b.id+'\" target=\"_blank\" class=\"ab\">Dashboard</a>'\n          +'</td>'\n          +'</tr>';\n      });\n      document.getElementById('b-bo').innerHTML=bh||'<tr><td colspan=\"7\" style=\"text-align:center;color:#444\">Aucun bot</td></tr>';\n\n      // COMMANDES\n      var oh='';\n      (d.commandes||[]).forEach(function(c){\n        var bo=(d.bots||[]).find(function(b){return b.id===c.bot_id;});\n        oh+='<tr>'\n          +'<td><strong style=\"color:#fff;font-size:12px\">'+(c.numero||c.id.substring(0,8))+'</strong></td>'\n          +'<td>'+(bo?bo.nom:c.bot_id)+'</td>'\n          +'<td>'+(c.client_nom||'-')+'</td>'\n          +'<td style=\"color:#00c875;font-weight:700\">'+(c.total||0).toLocaleString('fr-FR')+' F</td>'\n          +'<td><span style=\"background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px\">'+c.statut+'</span></td>'\n          +'<td style=\"color:#444;font-size:11px\">'+new Date(c.created_at).toLocaleString('fr-FR')+'</td>'\n          +'</tr>';\n      });\n      document.getElementById('b-cm').innerHTML=oh||'<tr><td colspan=\"6\" style=\"text-align:center;color:#444\">Aucune commande</td></tr>';\n\n      // MESSAGES\n      var mh='';\n      (d.recent_messages||[]).slice(0,20).forEach(function(m){\n        var bo=(d.bots||[]).find(function(b){return b.id===m.bot_id;});\n        mh+='<div style=\"display:flex;gap:10px;align-items:flex-start\">'\n          +'<div style=\"font-size:10px;color:#444;min-width:100px;padding-top:4px\">'+new Date(m.created_at).toLocaleTimeString('fr-FR')+'<br>'+(bo?bo.nom:'?')+'<br><span style=\"color:'+(m.role==='user'?'#6366f1':'#00c875')+'\">'+m.role+'</span></div>'\n          +'<div class=\"msg\">'+m.content.substring(0,200)+'</div>'\n          +'</div>';\n      });\n      document.getElementById('msgs-list').innerHTML=mh||'<div style=\"color:#444\">Aucun message</div>';\n    })\n    .catch(function(e){\n      document.getElementById('ref').textContent='Erreur: '+e.message;\n    });\n}\n\nasync function cp(btn){ var uid = btn.getAttribute('data-uid');\n  var plan=prompt('Nouveau plan (free/starter/pro/business):');\n  if(!plan)return;\n  var r=await fetch('/admin/user/'+uid+'/plan',{method:'PATCH',headers:{'Content-Type':'application/json','X-Admin-Secret':SEC},body:JSON.stringify({plan:plan})});\n  var d=await r.json();\n  if(d.success){alert('Plan mis a jour!');ld();}\n  else alert('Erreur: '+d.error);\n}\n\nld();\nsetInterval(ld,30000);\n</script>\n</body>\n</html>";
 
 app.get('/admin', (req, res) => {
-  if (req.query.secret !== ADMIN_SECRET) return res.status(401).send('Non autorisé — ajoutez ?secret=ADMIN_SECRET');
-  res.send(`<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SamaBot — Admin</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',sans-serif;background:#0a0a0a;color:#fff;min-height:100vh}
-.nav{background:#111;border-bottom:1px solid #222;padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
-.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800}.logo span{color:#00c875}
-.badge{background:#00c875;color:#000;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:800;margin-left:8px}
-.wrap{max-width:1200px;margin:0 auto;padding:28px 20px}
-.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px}
-.kpi{background:#111;border:1px solid #222;border-radius:12px;padding:20px}
-.kpi-val{font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:#00c875;line-height:1}
-.kpi-lbl{font-size:12px;color:#666;margin-top:6px}
-.kpi-sub{font-size:11px;color:#444;margin-top:3px}
-.section{margin-bottom:28px}
-.section-title{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-.table{width:100%;border-collapse:collapse}
-.table th{background:#111;border:1px solid #222;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666;text-align:left;font-weight:600}
-.table td{border:1px solid #1a1a1a;padding:10px 12px;font-size:13px;color:#ccc;vertical-align:top}
-.table tr:hover td{background:#111}
-.plan-pill{border-radius:20px;padding:2px 8px;font-size:10px;font-weight:800;display:inline-block}
-.plan-free{background:#222;color:#666}
-.plan-starter{background:#1a2e1a;color:#00c875}
-.plan-pro{background:#1a1a2e;color:#6366f1}
-.plan-business{background:#2e1a1a;color:#f59e0b}
-.status-dot{width:6px;height:6px;border-radius:50%;background:#00c875;display:inline-block;margin-right:4px}
-.status-dot.off{background:#ef4444}
-.bot-logo{width:28px;height:28px;border-radius:6px;object-fit:cover;vertical-align:middle;margin-right:6px}
-.bot-ava{width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:14px;vertical-align:middle;margin-right:6px}
-.revenue-bar{height:4px;background:#00c875;border-radius:2px;margin-top:4px}
-.action-btn{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;color:#ccc;cursor:pointer;font-family:inherit;transition:all .15s}
-.action-btn:hover{border-color:#00c875;color:#00c875}
-.msg-bubble{background:#1a1a1a;border-radius:8px;padding:8px 10px;font-size:12px;color:#999;max-width:300px;line-height:1.4}
-.chart-bar{display:flex;align-items:flex-end;gap:4px;height:60px;margin-top:10px}
-.bar{background:#00c875;border-radius:3px 3px 0 0;min-width:20px;transition:height .3s;opacity:.7}
-.bar:hover{opacity:1}
-.tabs{display:flex;gap:0;border-bottom:1px solid #222;margin-bottom:20px}
-.tab{padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;color:#666;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
-.tab.active{color:#00c875;border-bottom-color:#00c875}
-.tab-content{display:none}.tab-content.active{display:block}
-.search{background:#111;border:1px solid #333;border-radius:8px;padding:8px 14px;font-size:13px;color:#fff;font-family:inherit;outline:none;width:240px}
-.search:focus{border-color:#00c875}
-.flex-between{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px}
-@media(max-width:768px){.kpis{grid-template-columns:repeat(2,1fr)}.table{font-size:12px}}
-</style>
-</head>
-<body>
-<div class="nav">
-  <div><span class="logo">Sama<span>Bot</span></span><span class="badge">ADMIN</span></div>
-  <div style="font-size:12px;color:#444" id="last-refresh">Chargement...</div>
-</div>
-
-<div class="wrap">
-  <!-- KPIs -->
-  <div class="kpis" id="kpis">
-    <div class="kpi"><div class="kpi-val" id="k-users">—</div><div class="kpi-lbl">Clients</div></div>
-    <div class="kpi"><div class="kpi-val" id="k-bots">—</div><div class="kpi-lbl">Bots actifs</div></div>
-    <div class="kpi"><div class="kpi-val" id="k-msgs">—</div><div class="kpi-lbl">Msgs aujourd'hui</div></div>
-    <div class="kpi"><div class="kpi-val" id="k-orders">—</div><div class="kpi-lbl">Commandes total</div></div>
-    <div class="kpi"><div class="kpi-val" id="k-revenue">—</div><div class="kpi-lbl">Revenus clients</div></div>
-  </div>
-
-  <!-- Tabs -->
-  <div class="tabs">
-    <div class="tab active" onclick="showTab('clients',this)">👥 Clients</div>
-    <div class="tab" onclick="showTab('bots',this)">🤖 Bots</div>
-    <div class="tab" onclick="showTab('commandes',this)">📦 Commandes</div>
-    <div class="tab" onclick="showTab('messages',this)">💬 Messages</div>
-  </div>
-
-  <!-- CLIENTS -->
-  <div id="tab-clients" class="tab-content active">
-    <div class="flex-between">
-      <div class="section-title">👥 Tous les clients</div>
-      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-clients',this.value)"/>
-    </div>
-    <table class="table" id="tbl-clients">
-      <thead><tr><th>Client</th><th>Email</th><th>Plan</th><th>Bots</th><th>Inscrit le</th><th>Actions</th></tr></thead>
-      <tbody id="tbody-clients"><tr><td colspan="6" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- BOTS -->
-  <div id="tab-bots" class="tab-content">
-    <div class="flex-between">
-      <div class="section-title">🤖 Tous les bots</div>
-      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-bots',this.value)"/>
-    </div>
-    <table class="table" id="tbl-bots">
-      <thead><tr><th>Bot</th><th>Niche</th><th>Client</th><th>Messages</th><th>Commandes</th><th>Revenus</th><th>Créé le</th><th>Actions</th></tr></thead>
-      <tbody id="tbody-bots"><tr><td colspan="8" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- COMMANDES -->
-  <div id="tab-commandes" class="tab-content">
-    <div class="flex-between">
-      <div class="section-title">📦 Toutes les commandes</div>
-      <input class="search" placeholder="Rechercher..." oninput="filterTable('tbl-cmds',this.value)"/>
-    </div>
-    <table class="table" id="tbl-cmds">
-      <thead><tr><th>Référence</th><th>Bot</th><th>Client</th><th>Total</th><th>Statut</th><th>Date</th></tr></thead>
-      <tbody id="tbody-cmds"><tr><td colspan="6" style="text-align:center;color:#444">Chargement...</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- MESSAGES -->
-  <div id="tab-messages" class="tab-content">
-    <div class="section-title">💬 Messages récents</div>
-    <div id="msgs-list" style="display:flex;flex-direction:column;gap:8px"></div>
-  </div>
-</div>
-
-<script>
-var secret = '${ADMIN_SECRET}';
-var allData = {};
-
-function showTab(id,el){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('tab-'+id).classList.add('active');
-}
-
-function filterTable(tableId, query){
-  var rows = document.querySelectorAll('#'+tableId+' tbody tr');
-  var q = query.toLowerCase();
-  rows.forEach(r=>{ r.style.display = r.textContent.toLowerCase().includes(q)?'':'none'; });
-}
-
-async function loadData(){
-  try{
-    var r = await fetch('/admin/stats?secret='+secret);
-    var d = await r.json();
-    if(!r.ok){
-      throw new Error(d.error || ('HTTP '+r.status));
-    }
-    if(!d || !d.stats){
-      throw new Error('Réponse admin invalide');
-    }
-    allData = d;
-
-    // KPIs
-    document.getElementById('k-users').textContent = d.stats.total_users;
-    document.getElementById('k-bots').textContent = d.stats.total_bots;
-    document.getElementById('k-msgs').textContent = d.stats.messages_today;
-    document.getElementById('k-orders').textContent = d.commandes?.length||0;
-    document.getElementById('k-revenue').textContent = ((d.stats.total_revenue||0)/1000).toFixed(0)+'K F';
-    document.getElementById('last-refresh').textContent = 'Mis à jour: '+new Date().toLocaleTimeString('fr-FR');
-
-    // CLIENTS
-    var clientsHtml = '';
-    (d.users||[]).forEach(u=>{
-      var userBots = (d.bots||[]).filter(b=>b.user_id===u.id);
-      clientsHtml += '<tr>'
-        +'<td><strong style="color:#fff">'+( u.nom||'—')+'</strong></td>'
-        +'<td>'+u.email+'</td>'
-        +'<td><span class="plan-pill plan-'+(u.plan||'free')+'">'+( u.plan||'free').toUpperCase()+'</span></td>'
-        +'<td>'+userBots.length+' bot'+(userBots.length!==1?'s':'')+'</td>'
-        +'<td style="color:#444">'+new Date(u.created_at).toLocaleDateString('fr-FR')+'</td>'
-        +'<td><button class="action-btn" onclick="changePlan(\''+u.id+'\')">✏️ Plan</button></td>'
-        +'</tr>';
-    });
-    document.getElementById('tbody-clients').innerHTML = clientsHtml || '<tr><td colspan="6" style="text-align:center;color:#444">Aucun client</td></tr>';
-
-    // BOTS
-    var botsHtml = '';
-    (d.bots||[]).forEach(b=>{
-      var owner = (d.users||[]).find(u=>u.id===b.user_id);
-      var botCmds = (d.commandes||[]).filter(c=>c.bot_id===b.id);
-      var botRevenue = botCmds.filter(c=>c.statut==='paid').reduce((s,c)=>s+(c.total||0),0);
-      botsHtml += '<tr>'
-        +'<td>'+(b.logo_url?'<img class="bot-logo" src="'+b.logo_url+'" alt=""/>':'<span class="bot-ava" style="background:'+b.couleur+'">'+b.emoji+'</span>')+'<strong style="color:#fff">'+b.nom+'</strong></td>'
-        +'<td><span style="background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px">'+b.niche+'</span></td>'
-        +'<td style="color:#888">'+(owner?.email||'—')+'</td>'
-        +'<td>'+(b.messages_count||0)+'</td>'
-        +'<td>'+botCmds.length+'</td>'
-        +'<td style="color:#00c875;font-weight:700">'+(botRevenue/1000).toFixed(0)+'K F</td>'
-        +'<td style="color:#444">'+new Date(b.created_at).toLocaleDateString('fr-FR')+'</td>'
-        +'<td>'
-          +'<a href="/dashboard/'+b.id+'" target="_blank" class="action-btn">📊</a> '
-          +'<a href="/chat/'+b.id+'" target="_blank" class="action-btn">💬</a>'
-        +'</td>'
-        +'</tr>';
-    });
-    document.getElementById('tbody-bots').innerHTML = botsHtml || '<tr><td colspan="8" style="text-align:center;color:#444">Aucun bot</td></tr>';
-
-    // COMMANDES
-    var cmdsHtml = '';
-    (d.commandes||[]).forEach(c=>{
-      var bot = (d.bots||[]).find(b=>b.id===c.bot_id);
-      cmdsHtml += '<tr>'
-        +'<td><strong style="color:#fff;font-size:12px">'+( c.numero||c.id?.substring(0,8))+'</strong></td>'
-        +'<td>'+(bot?.nom||c.bot_id)+'</td>'
-        +'<td>'+(c.client_nom||'—')+(c.client_tel?'<br><span style="color:#444;font-size:11px">'+c.client_tel+'</span>':'')+'</td>'
-        +'<td style="color:#00c875;font-weight:700">'+(c.total||0).toLocaleString('fr-FR')+' F</td>'
-        +'<td><span style="background:#1a1a1a;padding:2px 8px;border-radius:20px;font-size:11px">'+c.statut+'</span></td>'
-        +'<td style="color:#444;font-size:11px">'+new Date(c.created_at).toLocaleString('fr-FR')+'</td>'
-        +'</tr>';
-    });
-    document.getElementById('tbody-cmds').innerHTML = cmdsHtml || '<tr><td colspan="6" style="text-align:center;color:#444">Aucune commande</td></tr>';
-
-    // MESSAGES
-    var msgsHtml = '';
-    (d.recent_messages||[]).slice(0,30).forEach(m=>{
-      var bot = (d.bots||[]).find(b=>b.id===m.bot_id);
-      msgsHtml += '<div style="display:flex;gap:10px;align-items:flex-start">'
-        +'<div style="font-size:10px;color:#444;min-width:80px;padding-top:4px">'+new Date(m.created_at).toLocaleTimeString('fr-FR')+'<br>'+(bot?.nom||'?')+'</div>'
-        +'<div class="msg-bubble">'+(m.content||'').substring(0,200)+'</div>'
-        +'</div>';
-    });
-    document.getElementById('msgs-list').innerHTML = msgsHtml || '<div style="color:#444;text-align:center;padding:20px">Aucun message</div>';
-
-  }catch(e){
-    console.error('Admin load error:',e);
-    document.getElementById('last-refresh').textContent = 'Erreur chargement admin';
-    document.getElementById('k-users').textContent = '!';
-    document.getElementById('k-bots').textContent = '!';
-    document.getElementById('k-msgs').textContent = '!';
-    document.getElementById('k-orders').textContent = '!';
-    document.getElementById('k-revenue').textContent = '!';
-    document.getElementById('tbody-clients').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ef4444">Erreur: '+(e.message||'chargement impossible')+'</td></tr>';
-    document.getElementById('tbody-bots').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#ef4444">Erreur: '+(e.message||'chargement impossible')+'</td></tr>';
-    document.getElementById('tbody-cmds').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ef4444">Erreur: '+(e.message||'chargement impossible')+'</td></tr>';
-    document.getElementById('msgs-list').innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px">Erreur: '+(e.message||'chargement impossible')+'</div>';
-  }
-}
-
-async function changePlan(userId){
-  var plan = prompt('Nouveau plan (free/starter/pro/business):');
-  if(!plan) return;
-  var r = await fetch('/admin/user/'+userId+'/plan',{method:'PATCH',headers:{'Content-Type':'application/json','X-Admin-Secret':secret},body:JSON.stringify({plan})});
-  var d = await r.json();
-  if(d.success){ alert('✅ Plan mis à jour!'); loadData(); }
-  else alert('Erreur: '+d.error);
-}
-
-loadData();
-setInterval(loadData, 30000); // Refresh toutes les 30s
-</script>
-</body>
-</html>`);
+  if (req.query.secret !== ADMIN_SECRET) return res.status(401).send('Non autorise');
+  const html = adminPageHtml.replace('PLACEHOLDER_SECRET', ADMIN_SECRET);
+  res.send(html);
 });
 
-// Admin API endpoints
+
 app.get('/admin/stats', async (req, res) => {
   if (req.query.secret !== ADMIN_SECRET && req.headers['x-admin-secret'] !== ADMIN_SECRET)
     return res.status(401).json({ error:'Non autorisé' });
-  if (!CONFIG.SUPABASE_SERVICE_KEY) {
-    return res.status(500).json({
-      error: 'SUPABASE_SERVICE_KEY manquante: admin ne peut pas lire les données protégées par RLS'
-    });
-  }
   try {
     const [bots, users, msgs, commandes, audio] = await Promise.all([
       db.select('bots','?actif=eq.true&order=created_at.desc'),
@@ -4218,20 +3974,6 @@ app.get('/admin/stats', async (req, res) => {
       db.select('commandes','?order=created_at.desc&limit=100'),
       db.select('audio_messages','?order=created_at.desc&limit=20')
     ]);
-
-    const payloads = { bots, users, msgs, commandes, audio };
-    for (const [name, value] of Object.entries(payloads)) {
-      if (isSupabaseErrorPayload(value)) {
-        return res.status(500).json({
-          error: `Erreur Supabase sur ${name}: ${value.message || 'inconnue'}`,
-          detail: value
-        });
-      }
-      if (!Array.isArray(value)) {
-        return res.status(500).json({ error: `Réponse invalide pour ${name}` });
-      }
-    }
-
     const msgsToday = msgs?.filter(m=>new Date(m.created_at)>new Date(Date.now()-86400000)).length||0;
     const revenu = commandes?.filter(c=>c.statut==='paid').reduce((s,c)=>s+(c.total||0),0)||0;
     res.json({
@@ -4253,11 +3995,16 @@ app.patch('/admin/user/:id/plan', async (req, res) => {
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
-// Test token (debug)
+// Logout (stateless mais utile pour uniformiser)
+app.post('/auth/logout', (req, res) => {
+  res.json({ success: true, message: 'Déconnecté' });
+});
+
+// Test token
 app.get('/auth/test', (req, res) => {
   const token = req.query.token || req.headers.authorization?.replace('Bearer ','');
   const userId = verifyToken(token);
-  res.json({ token: token?.substring(0,20)+'...', userId, valid: !!userId });
+  res.json({ valid: !!userId, userId: userId || null });
 });
 
 // Reset password (admin)
@@ -4407,160 +4154,14 @@ async function register(){
 }
 document.addEventListener('keydown',function(e){if(e.key==='Enter'){var a=document.querySelector('.form.active').id;if(a==='form-login')login();else register();}});
 ${error ? `show('Erreur Google: ${error}. Essayez avec email.','err');` : ''}
-(async function(){
-  var t=localStorage.getItem('sb-token');
-  if(!t)return;
-  try{
-    var r=await fetch('/auth/test',{headers:{'Authorization':'Bearer '+t}});
-    var d=await r.json();
-    if(d&&d.valid)window.location.href='/app';
-    else{localStorage.removeItem('sb-token');localStorage.removeItem('sb-user');}
-  }catch(e){}
-})();
+if(localStorage.getItem('sb-token'))window.location.href='/app';
 </script>
 </body>
 </html>`);
 });
 
 app.get('/app', (req, res) => {
-  const base = CONFIG.BASE_URL;
-  res.send(`<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SamaBot — Mon espace</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
-.nav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
-.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}.logo span{color:#00c875}
-.nav-r{display:flex;align-items:center;gap:10px}
-.u-name{font-size:13px;color:rgba(255,255,255,.55)}
-.btn-out{background:rgba(255,255,255,.08);border:none;border-radius:8px;padding:6px 14px;color:rgba(255,255,255,.55);font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s}
-.btn-out:hover{color:#fff;background:rgba(255,255,255,.15)}
-.wrap{max-width:960px;margin:0 auto;padding:32px 20px}
-.page-title{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
-.page-sub{font-size:14px;color:#5a7060;margin-bottom:28px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.card{background:#fff;border-radius:14px;padding:20px;border:1px solid rgba(0,200,117,.1);transition:all .2s}
-.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08);border-color:rgba(0,200,117,.25)}
-.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
-.card-logo{width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0}
-.card-ava{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-.card-name{font-size:15px;font-weight:700;color:#0a1a0f;line-height:1.2}
-.card-niche{font-size:12px;color:#5a7060;margin-top:2px;text-transform:capitalize}
-.card-stats{display:flex;gap:6px;margin-bottom:14px}
-.stat{background:#f0f4f1;border-radius:8px;padding:6px 10px;text-align:center;flex:1}
-.stat-val{font-size:16px;font-weight:800;color:#0a1a0f}
-.stat-lbl{font-size:10px;color:#9ab0a0;margin-top:1px}
-.card-btns{display:flex;gap:6px}
-.cb{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;text-align:center;border:none;transition:all .15s;display:block}
-.cb-g{background:#00c875;color:#fff}.cb-g:hover{background:#00a862}
-.cb-o{background:#f0f4f1;color:#0a1a0f}.cb-o:hover{background:#e5e7eb}
-.add-card{border:2px dashed rgba(0,200,117,.3);border-radius:14px;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all .2s;background:#f9fdf9}
-.add-card:hover{border-color:#00c875;background:rgba(0,200,117,.04)}
-.add-ico{font-size:32px}.add-txt{font-size:14px;font-weight:600;color:#5a7060}
-.empty{text-align:center;padding:60px 20px;color:#9ab0a0}
-.empty-ico{font-size:48px;margin-bottom:12px}
-.empty-txt{font-size:15px;font-weight:600;margin-bottom:6px;color:#5a7060}
-.empty-sub{font-size:13px}
-.plan-pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;display:inline-block}
-</style>
-</head>
-<body>
-<div class="nav">
-  <div class="logo">Sama<span>Bot</span></div>
-  <div class="nav-r">
-    <span class="u-name" id="u-name"></span>
-    <button class="btn-out" onclick="logout()">Déconnexion</button>
-  </div>
-</div>
-<div class="wrap">
-  <div class="page-title">Mes bots 🤖</div>
-  <div class="page-sub" id="page-sub">Chargement...</div>
-  <div class="grid" id="grid"><div class="empty"><div class="empty-ico">⏳</div><div class="empty-txt">Chargement...</div></div></div>
-</div>
-<script>
-// ---- Fonctions définies EN PREMIER ----
-function logout(){
-  var currentToken = localStorage.getItem('sb-token');
-  fetch('/auth/logout', {
-    method: 'POST',
-    headers: currentToken ? { 'Authorization':'Bearer '+currentToken } : {}
-  }).catch(function(){});
-  localStorage.removeItem('sb-token');
-  localStorage.removeItem('sb-user');
-  window.location.href='/login';
-}
-
-// Récupère token depuis URL (Google OAuth callback)
-(function(){
-  try {
-    var params = new URLSearchParams(window.location.search);
-    var t = params.get('token');
-    var u = params.get('user');
-    if(t){
-      // Token est URL-safe base64 — pas besoin de décoder
-      localStorage.setItem('sb-token', t);
-      if(u){ try{ localStorage.setItem('sb-user', decodeURIComponent(u)); }catch(e){} }
-      window.history.replaceState({},'','/app');
-    }
-  } catch(e) { console.error('Token parse error:', e); }
-})();
-
-var token = localStorage.getItem('sb-token');
-var userRaw = localStorage.getItem('sb-user') || '{}';
-var user = {};
-try { user = JSON.parse(userRaw); } catch(e) {}
-
-if(!token){ window.location.href = '/login'; }
-
-var nameEl = document.getElementById('u-name');
-if(nameEl) nameEl.textContent = user.nom || user.email || '';
-
-async function loadBots(){
-  var grid = document.getElementById('grid');
-  try{
-    var r = await fetch('/auth/my-bots', { headers:{ 'Authorization':'Bearer '+token } });
-    if(r.status === 401){ logout(); return; }
-    var bots = await r.json();
-
-    if(!Array.isArray(bots)){
-      grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+( bots.error||'Erreur serveur')+'</div></div>';
-      return;
-    }
-
-    var subEl = document.getElementById('page-sub');
-    if(subEl) subEl.innerHTML = '<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
-
-    var html = '';
-    if(bots.length){
-      bots.forEach(function(b){
-        var logo = b.logo_url
-          ? '<img class="card-logo" src="'+b.logo_url+'" alt=""/>'
-          : '<div class="card-ava" style="background:'+(b.couleur||'#00c875')+'">'+(b.emoji||'🤖')+'</div>';
-        html += '<div class="card">'
-          + '<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
-          + '<div class="card-btns">'
-          + '<a class="cb cb-o" href="/chat/'+b.id+'" target="_blank">💬 Chat</a>'
-          + '<a class="cb cb-g" href="/dashboard/'+b.id+'">📊 Dashboard</a>'
-          + '</div></div>';
-      });
-    } else {
-      html = '<div class="empty"><div class="empty-ico">🤖</div><div class="empty-txt">Pas encore de bot</div><div class="empty-sub">Créez votre premier assistant IA</div></div>';
-    }
-    html += '<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
-    grid.innerHTML = html;
-  } catch(e){
-    grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+e.message+'</div></div>';
-  }
-}
-
-loadBots();
-</script>
-</body>
-</html>`);
+  res.send(appPageHtml);
 });
 
 app.get('/webhook', (req,res) => {
@@ -4568,10 +4169,174 @@ app.get('/webhook', (req,res) => {
     res.status(200).send(req.query['hub.challenge']);
   else res.sendStatus(403);
 });
-app.post('/webhook', (req,res) => res.sendStatus(200));
+
+// ============================================
+// WEBHOOK WHATSAPP — Réception des messages entrants
+// Compatible: Meta Cloud API ET WaSender
+// ============================================
+app.post('/webhook', async (req, res) => {
+  // Toujours répondre 200 immédiatement pour éviter les retries du provider
+  res.sendStatus(200);
+
+  try {
+    const body = req.body || {};
+    console.log('📥 Webhook reçu:', JSON.stringify(body).substring(0, 300));
+
+    // ---- Format Meta Cloud API ----
+    // body.entry[0].changes[0].value.messages[0]
+    if (body.object === 'whatsapp_business_account' && Array.isArray(body.entry)) {
+      for (const entry of body.entry) {
+        for (const change of (entry.changes || [])) {
+          const value = change.value || {};
+          const messages = value.messages || [];
+          const phoneNumberId = value.metadata?.phone_number_id; // Numéro qui a reçu le msg = bot
+
+          for (const msg of messages) {
+            const from = msg.from; // Numéro client
+            const msgType = msg.type;
+            let text = '';
+
+            if (msgType === 'text') text = msg.text?.body || '';
+            else if (msgType === 'button') text = msg.button?.text || '';
+            else if (msgType === 'interactive') text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '';
+            else if (msgType === 'audio') text = '[Message vocal reçu]'; // TODO: transcrire
+            else { console.log(`📥 Type message non supporté: ${msgType}`); continue; }
+
+            if (!text || !from) continue;
+
+            // Trouver le bot associé à ce numéro WhatsApp Business
+            const bot = await findBotForWhatsApp(phoneNumberId, value.metadata?.display_phone_number);
+            if (!bot) {
+              console.log(`⚠️ Aucun bot trouvé pour phone_number_id=${phoneNumberId}`);
+              continue;
+            }
+
+            await handleWhatsAppMessage(bot, from, text, 'meta');
+          }
+        }
+      }
+      return;
+    }
+
+    // ---- Format WaSender ----
+    // body.event = 'message.received', body.data.from, body.data.message.text...
+    if (body.event === 'message.received' || body.event === 'messages.upsert') {
+      const data = body.data || body.message || {};
+      const from = data.from || data.sender || data.remoteJid || data.key?.remoteJid;
+      let text = data.text || data.body || data.message?.conversation || data.message?.text || data.message?.extendedTextMessage?.text || '';
+
+      // Nettoie le numéro WhatsApp (format: 221771234567@s.whatsapp.net)
+      const cleanFrom = from ? from.replace(/@.*$/, '').replace(/[^\d]/g, '') : null;
+      if (!cleanFrom || !text) { console.log('⚠️ WaSender: from ou text manquant'); return; }
+
+      // Ignore les messages qu'on a envoyés nous-mêmes (fromMe)
+      if (data.fromMe || data.key?.fromMe) return;
+
+      // Trouve le bot associé via session_id
+      const sessionId = body.session_id || body.sessionId || data.session_id;
+      const bot = await findBotForWhatsApp(sessionId, null);
+      if (!bot) {
+        console.log(`⚠️ Aucun bot trouvé pour session=${sessionId}`);
+        return;
+      }
+
+      await handleWhatsAppMessage(bot, cleanFrom, text, 'wasender');
+      return;
+    }
+
+    console.log('📥 Webhook format inconnu, ignoré');
+  } catch(e) {
+    console.error('Webhook error:', e.message, e.stack);
+  }
+});
+
+// Trouve le bot correspondant à un numéro/session WhatsApp
+async function findBotForWhatsApp(phoneNumberIdOrSession, displayNumber) {
+  try {
+    // Cherche par whatsapp_phone_id, whatsapp_session_id, ou notifications_phone
+    const bots = await db.select('bots', `?actif=eq.true`);
+    if (!bots?.length) return null;
+
+    // Match par phone_number_id (Meta) ou session_id (WaSender)
+    let bot = bots.find(b =>
+      b.whatsapp_phone_id === phoneNumberIdOrSession ||
+      b.whatsapp_session_id === phoneNumberIdOrSession
+    );
+    if (bot) return bot;
+
+    // Fallback: match par numéro de notification
+    if (displayNumber) {
+      const clean = displayNumber.replace(/[^\d]/g, '');
+      bot = bots.find(b => {
+        const bn = (b.notifications_phone || b.telephone || '').replace(/[^\d]/g, '');
+        return bn && (bn === clean || bn.endsWith(clean) || clean.endsWith(bn));
+      });
+      if (bot) return bot;
+    }
+
+    // Dernier recours: si un seul bot existe, on l'utilise
+    if (bots.length === 1) return bots[0];
+
+    return null;
+  } catch(e) {
+    console.error('findBotForWhatsApp:', e.message);
+    return null;
+  }
+}
+
+// Traite un message WhatsApp entrant: appelle l'IA + renvoie la réponse
+async function handleWhatsAppMessage(bot, fromPhone, text, source) {
+  try {
+    console.log(`📥 [${source}] ${fromPhone} → ${bot.nom}: "${text.substring(0,60)}"`);
+
+    const sid = `wa_${bot.id}_${fromPhone}`;
+
+    // Vérifie d'abord les workflows
+    let reply = await runWorkflows(bot.id, text, sid);
+
+    // Sinon appelle l'IA
+    if (!reply) {
+      reply = await callAI(bot.prompt, sid, text);
+    }
+
+    if (!reply) {
+      console.log('⚠️ Pas de réponse générée');
+      return;
+    }
+
+    // Détecte un total dans la réponse pour créer une commande
+    const totalMatch = reply.match(/total\s*[:\-]\s*([0-9][0-9\s]*)\s*f?cfa/i) ||
+                       reply.match(/([0-9][0-9\s]{2,})\s*f?cfa/i);
+    if (totalMatch) {
+      const orderTotal = parseInt(totalMatch[1].replace(/\s/g,''));
+      if (orderTotal > 0 && orderTotal < 10000000) {
+        autoCreateCommande(bot.id, sid, orderTotal, bot).catch(e=>console.error('autoCommande WA:', e.message));
+      }
+    }
+
+    // Envoie la réponse au client via WhatsApp
+    const sent = await sendWhatsApp(fromPhone, reply);
+    console.log(`📤 Réponse WhatsApp ${sent?'envoyée':'échouée'} à ${fromPhone}`);
+
+    // Sauvegarde la conversation
+    saveMsg(bot.id, sid, text, reply).catch(e=>console.error('saveMsg WA:', e.message));
+
+    // Met à jour les infos client (téléphone) sur la conversation
+    updateConvClientPhone(bot.id, sid, fromPhone).catch(()=>{});
+  } catch(e) {
+    console.error('handleWhatsAppMessage:', e.message);
+  }
+}
+
+// Met à jour le numéro client sur la conversation
+async function updateConvClientPhone(botId, sessionId, phone) {
+  try {
+    await db.update('conversations', { client_tel: phone, canal: 'whatsapp' }, `?bot_id=eq.${botId}&session_id=eq.${sessionId}`);
+  } catch(e) {}
+}
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'9.0', status:'active',
+  app:'🤖 SamaBot IA', version:'10.3', status:'active',
   features:['broadcasts','inbox-unifiee','workflow-automation','multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
