@@ -4428,7 +4428,8 @@ var userRaw = localStorage.getItem('sb-user') || '{}';
 var user = {};
 try { user = JSON.parse(userRaw); } catch(e) {}
 
-if(!token){ window.location.href = '/login'; throw new Error('no token'); }
+if(!token){ window.location.href = '/login'; }
+else {
 
 var nameEl = document.getElementById('u-name');
 if(nameEl) nameEl.textContent = user.nom || user.email || '';
@@ -4472,6 +4473,7 @@ async function loadBots(){
 }
 
 loadBots();
+}
 </script>
 </body>
 </html>`);
