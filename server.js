@@ -1221,10 +1221,10 @@ app.get('/auth/google/callback', async (req, res) => {
     if (!user) return res.redirect('/login?error=user_create');
 
     const token = generateToken(user.id);
-    const userJson = encodeURIComponent(JSON.stringify({ id:user.id, email:user.email, nom:user.nom, plan:user.plan }));
-    // Encode le token en base64url pour éviter les problèmes avec + et / dans l'URL
+    const userObj = { id:user.id, email:user.email, nom:user.nom, plan:user.plan };
     const safeToken = encodeURIComponent(token);
-    res.redirect(`/app?token=${safeToken}&user=${userJson}`);
+    const safeUser = encodeURIComponent(JSON.stringify(userObj));
+    res.redirect(`/app?token=${safeToken}&user=${safeUser}`);
   } catch(e) {
     console.error('Google OAuth error:', e.message);
     res.redirect('/login?error=server');
@@ -4357,57 +4357,75 @@ body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
   <div class="grid" id="grid"><div class="empty"><div class="empty-ico">⏳</div><div class="empty-txt">Chargement...</div></div></div>
 </div>
 <script>
-// Récupère token Google depuis URL (après OAuth callback) — AVANT tout
-var params=new URLSearchParams(window.location.search);
-if(params.get('token')){
-  // Décode le token (encodeURIComponent côté serveur)
-  var rawToken = decodeURIComponent(params.get('token'));
-  localStorage.setItem('sb-token', rawToken);
-  try{ localStorage.setItem('sb-user', JSON.stringify(JSON.parse(decodeURIComponent(params.get('user')||'{}')))); }catch(e){}
-  window.history.replaceState({},'','/app');
+// ---- Fonctions définies EN PREMIER ----
+function logout(){
+  localStorage.removeItem('sb-token');
+  localStorage.removeItem('sb-user');
+  window.location.href='/login';
 }
 
-var token=localStorage.getItem('sb-token');
-var user=JSON.parse(localStorage.getItem('sb-user')||'{}');
+// Récupère token depuis URL (Google OAuth callback)
+(function(){
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var t = params.get('token');
+    var u = params.get('user');
+    if(t){
+      localStorage.setItem('sb-token', decodeURIComponent(t));
+      if(u){ try{ localStorage.setItem('sb-user', decodeURIComponent(u)); }catch(e){} }
+      window.history.replaceState({},'','/app');
+    }
+  } catch(e) {}
+})();
 
-if(!token){ window.location.href='/login'; }
-document.getElementById('u-name').textContent=user.nom||user.email||'';
+var token = localStorage.getItem('sb-token');
+var userRaw = localStorage.getItem('sb-user') || '{}';
+var user = {};
+try { user = JSON.parse(userRaw); } catch(e) {}
+
+if(!token){ window.location.href = '/login'; }
+
+var nameEl = document.getElementById('u-name');
+if(nameEl) nameEl.textContent = user.nom || user.email || '';
 
 async function loadBots(){
-  var grid=document.getElementById('grid');
+  var grid = document.getElementById('grid');
   try{
-    var r=await fetch('/auth/my-bots',{headers:{'Authorization':'Bearer '+token}});
-    if(r.status===401){logout();return;}
-    var bots=await r.json();
+    var r = await fetch('/auth/my-bots', { headers:{ 'Authorization':'Bearer '+token } });
+    if(r.status === 401){ logout(); return; }
+    var bots = await r.json();
 
     if(!Array.isArray(bots)){
-      grid.innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur serveur</div><div class="empty-sub">'+JSON.stringify(bots)+'</div></div>';
+      grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+( bots.error||'Erreur serveur')+'</div></div>';
       return;
     }
 
-    document.getElementById('page-sub').innerHTML='<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
-    var html='';
+    var subEl = document.getElementById('page-sub');
+    if(subEl) subEl.innerHTML = '<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
+
+    var html = '';
     if(bots.length){
       bots.forEach(function(b){
-        var logo=b.logo_url?'<img class="card-logo" src="'+b.logo_url+'" alt="'+b.nom+'"/>':'<div class="card-ava" style="background:'+(b.couleur||'#00c875')+'">'+( b.emoji||'🤖')+'</div>';
-        html+='<div class="card">'
-          +'<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
-          +'<div class="card-btns">'
-          +'<a class="cb cb-o" href="/chat/'+b.id+'" target="_blank">💬 Chat</a>'
-          +'<a class="cb cb-g" href="/dashboard/'+b.id+'">📊 Dashboard</a>'
-          +'</div></div>';
+        var logo = b.logo_url
+          ? '<img class="card-logo" src="'+b.logo_url+'" alt=""/>'
+          : '<div class="card-ava" style="background:'+(b.couleur||'#00c875')+'">'+(b.emoji||'🤖')+'</div>';
+        html += '<div class="card">'
+          + '<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
+          + '<div class="card-btns">'
+          + '<a class="cb cb-o" href="/chat/'+b.id+'" target="_blank">💬 Chat</a>'
+          + '<a class="cb cb-g" href="/dashboard/'+b.id+'">📊 Dashboard</a>'
+          + '</div></div>';
       });
-    }else{
-      html='<div class="empty"><div class="empty-ico">🤖</div><div class="empty-txt">Pas encore de bot</div><div class="empty-sub">Créez votre premier assistant IA</div></div>';
+    } else {
+      html = '<div class="empty"><div class="empty-ico">🤖</div><div class="empty-txt">Pas encore de bot</div><div class="empty-sub">Créez votre premier assistant IA</div></div>';
     }
-    html+='<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
-    grid.innerHTML=html;
-  }catch(e){
-    grid.innerHTML='<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">Erreur: '+e.message+'</div></div>';
+    html += '<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
+    grid.innerHTML = html;
+  } catch(e){
+    grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+e.message+'</div></div>';
   }
 }
 
-function logout(){localStorage.removeItem('sb-token');localStorage.removeItem('sb-user');window.location.href='/login';}
 loadBots();
 </script>
 </body>
