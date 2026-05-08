@@ -29,6 +29,8 @@ const CONFIG = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
 };
 
+const appPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}\nnav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}\n.logo b{color:#00c875}\n.wrap{max-width:960px;margin:0 auto;padding:32px 20px}\nh1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}\n.sub{font-size:14px;color:#5a7060;margin-bottom:28px}\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}\n.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb}\n.ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}\n.av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px}\n.cn{font-size:15px;font-weight:700;color:#0a1a0f}\n.cni{font-size:12px;color:#5a7060}\n.cb{display:flex;gap:6px}\n.ba{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;text-align:center;border:none;cursor:pointer;display:block}\n.bg{background:#00c875;color:#fff}\n.bo{background:#f0f4f1;color:#0a1a0f}\n.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;text-align:center;cursor:pointer;background:#f9fdf9}\n.add:hover{border-color:#00c875}\n.empty{text-align:center;padding:40px;color:#9ab0a0}\n.deco{background:rgba(255,255,255,.1);border:none;border-radius:8px;padding:8px 16px;color:#fff;font-size:13px;cursor:pointer}\n</style>\n</head>\n<body>\n<nav>\n  <div class=\"logo\">Sama<b>Bot</b></div>\n  <button class=\"deco\" id=\"deco\">Deconnexion</button>\n</nav>\n<div class=\"wrap\">\n  <h1>Mes bots</h1>\n  <div class=\"sub\" id=\"info\">Chargement...</div>\n  <div class=\"grid\" id=\"grid\"><div class=\"empty\">Chargement...</div></div>\n</div>\n<script>\ndocument.getElementById('deco').onclick = function() {\n  localStorage.clear();\n  window.location.href = '/login';\n};\n\nvar tk = localStorage.getItem('sb-token');\n\nvar hrf = window.location.href;\nvar tm = hrf.match(/[?&]token=([^&]+)/);\nif (tm && tm[1]) {\n  localStorage.setItem('sb-token', tm[1]);\n  var um = hrf.match(/[?&]user=([^&]+)/);\n  if (um && um[1]) {\n    try { localStorage.setItem('sb-user', decodeURIComponent(um[1])); } catch(e) {}\n  }\n  tk = tm[1];\n  history.replaceState({}, '', '/app');\n}\n\nif (!tk) {\n  window.location.href = '/login';\n} else {\n  fetch('/auth/my-bots', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) { return r.json(); })\n    .then(function(bots) {\n      var grid = document.getElementById('grid');\n      var info = document.getElementById('info');\n      if (!Array.isArray(bots)) {\n        info.textContent = bots.error || 'Erreur';\n        grid.innerHTML = '<div class=\"empty\">' + (bots.error || 'Erreur') + '</div>';\n        return;\n      }\n      info.textContent = bots.length + ' bot' + (bots.length !== 1 ? 's' : '');\n      var h = '';\n      for (var i = 0; i < bots.length; i++) {\n        var b = bots[i];\n        var av = b.logo_url\n          ? '<img src=\"' + b.logo_url + '\" style=\"width:42px;height:42px;border-radius:10px;object-fit:cover\" alt=\"\" />'\n          : '<div class=\"av\" style=\"background:' + (b.couleur || '#00c875') + '\">' + (b.emoji || '?') + '</div>';\n        h += '<div class=\"card\">';\n        h += '<div class=\"ch\">' + av + '<div><div class=\"cn\">' + b.nom + '</div><div class=\"cni\">' + b.niche + '</div></div></div>';\n        h += '<div class=\"cb\">';\n        h += '<a class=\"ba bo\" href=\"/chat/' + b.id + '\" target=\"_blank\">Chat</a>';\n        h += '<a class=\"ba bg\" href=\"/dashboard/' + b.id + '\">Dashboard</a>';\n        h += '</div></div>';\n      }\n      if (!bots.length) { h = '<div class=\"empty\">Pas encore de bot. Creez-en un!</div>'; }\n      h += '<div class=\"add\" id=\"addbtn\"><div style=\"font-size:32px\">+</div><div style=\"font-size:14px;font-weight:600;color:#5a7060\">Nouveau bot</div></div>';\n      grid.innerHTML = h;\n      document.getElementById('addbtn').onclick = function() { window.location.href = '/setup'; };\n    })\n    .catch(function(e) {\n      document.getElementById('info').textContent = 'Erreur: ' + e.message;\n    });\n}\n</script>\n</body>\n</html>";
+
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
 const BUCKET = 'samabot-media';
 
@@ -4338,139 +4340,8 @@ if(localStorage.getItem('sb-token'))window.location.href='/app';
 });
 
 app.get('/app', (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SamaBot</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
-nav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}
-.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}
-.logo span{color:#00c875}
-.wrap{max-width:960px;margin:0 auto;padding:32px 20px}
-h1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
-.sub{font-size:14px;color:#5a7060;margin-bottom:28px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb;transition:all .2s;cursor:pointer}
-.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)}
-.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
-.card-ava{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-.card-logo{width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0}
-.card-name{font-size:15px;font-weight:700;color:#0a1a0f}
-.card-niche{font-size:12px;color:#5a7060;margin-top:2px}
-.btns{display:flex;gap:6px}
-.btn{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;text-align:center;border:none;display:block}
-.btn-g{background:#00c875;color:#fff}
-.btn-o{background:#f0f4f1;color:#0a1a0f}
-.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;background:#f9fdf9}
-.add:hover{border-color:#00c875}
-.empty{text-align:center;padding:60px 20px;color:#9ab0a0}
-.btn-out{background:rgba(255,255,255,.1);border:none;border-radius:8px;padding:8px 16px;color:#fff;font-size:13px;cursor:pointer;font-family:inherit}
-.btn-out:hover{background:rgba(255,255,255,.2)}
-#status{font-size:13px;color:#5a7060;margin-bottom:16px}
-</style>
-</head>
-<body>
-<nav>
-  <div class="logo">Sama<span>Bot</span></div>
-  <button class="btn-out" id="btn-logout">Deconnexion</button>
-</nav>
-<div class="wrap">
-  <h1>Mes bots</h1>
-  <div class="sub" id="status">Chargement...</div>
-  <div class="grid" id="grid"></div>
-</div>
-<script>
-// Deconnexion
-document.getElementById('btn-logout').addEventListener('click', function() {
-  localStorage.removeItem('sb-token');
-  localStorage.removeItem('sb-user');
-  window.location.href = '/login';
+  res.send(appPageHtml);
 });
-
-// Recupere token depuis URL si present (apres Google OAuth)
-var href = window.location.href;
-var m = href.match(/[?&]token=([^&]+)/);
-var mu = href.match(/[?&]user=([^&]+)/);
-if (m && m[1]) {
-  localStorage.setItem('sb-token', m[1]);
-  if (mu && mu[1]) {
-    try { localStorage.setItem('sb-user', decodeURIComponent(mu[1])); } catch(e) {}
-  }
-  window.history.replaceState({}, '', '/app');
-}
-
-var token = localStorage.getItem('sb-token');
-
-if (!token) {
-  window.location.href = '/login';
-} else {
-  var userStr = localStorage.getItem('sb-user') || '{}';
-  var user = {};
-  try { user = JSON.parse(userStr); } catch(e) {}
-
-  loadBots();
-}
-
-function loadBots() {
-  var grid = document.getElementById('grid');
-  var status = document.getElementById('status');
-
-  fetch('/auth/my-bots', {
-    headers: { 'Authorization': 'Bearer ' + token }
-  })
-  .then(function(r) {
-    if (r.status === 401) {
-      localStorage.removeItem('sb-token');
-      window.location.href = '/login';
-      return null;
-    }
-    return r.json();
-  })
-  .then(function(bots) {
-    if (!bots) return;
-
-    status.textContent = bots.length + ' bot' + (bots.length !== 1 ? 's' : '');
-
-    var html = '';
-    for (var i = 0; i < bots.length; i++) {
-      var b = bots[i];
-      var img = b.logo_url
-        ? '<img class="card-logo" src="' + b.logo_url + '" alt=""/>'
-        : '<div class="card-ava" style="background:' + (b.couleur || '#00c875') + '">' + (b.emoji || '?') + '</div>';
-      html += '<div class="card">'
-        + '<div class="card-head">' + img + '<div><div class="card-name">' + b.nom + '</div><div class="card-niche">' + b.niche + '</div></div></div>'
-        + '<div class="btns">'
-        + '<a class="btn btn-o" href="/chat/' + b.id + '" target="_blank">Chat</a>'
-        + '<a class="btn btn-g" href="/dashboard/' + b.id + '">Dashboard</a>'
-        + '</div></div>';
-    }
-
-    if (!bots.length) {
-      html = '<div class="empty"><div style="font-size:48px;margin-bottom:12px">robot</div><div>Pas encore de bot</div></div>';
-    }
-
-    html += '<div class="add" onclick="window.location.href=\'/setup\'">'
-      + '<div style="font-size:32px">+</div>'
-      + '<div style="font-size:14px;font-weight:600;color:#5a7060">Nouveau bot</div>'
-      + '</div>';
-
-    grid.innerHTML = html;
-  })
-  .catch(function(e) {
-    status.textContent = 'Erreur: ' + e.message;
-    grid.innerHTML = '<div class="empty">Impossible de charger les bots</div>';
-  });
-}
-</script>
-</body>
-</html>`);
-});
-
 
 app.get('/webhook', (req,res) => {
   if(req.query['hub.mode']==='subscribe'&&req.query['hub.verify_token']===CONFIG.META_VERIFY_TOKEN)
