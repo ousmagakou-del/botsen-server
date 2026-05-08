@@ -29,7 +29,7 @@ const CONFIG = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
 };
 
-const appPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}\nnav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}\n.logo b{color:#00c875}\n.wrap{max-width:960px;margin:0 auto;padding:32px 20px}\nh1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}\n.sub{font-size:14px;color:#5a7060;margin-bottom:28px}\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}\n.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb}\n.ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}\n.av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px}\n.cn{font-size:15px;font-weight:700;color:#0a1a0f}\n.cni{font-size:12px;color:#5a7060}\n.cb{display:flex;gap:6px}\n.ba{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;text-align:center;border:none;cursor:pointer;display:block}\n.bg{background:#00c875;color:#fff}\n.bo{background:#f0f4f1;color:#0a1a0f}\n.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;text-align:center;cursor:pointer;background:#f9fdf9}\n.add:hover{border-color:#00c875}\n.empty{text-align:center;padding:40px;color:#9ab0a0}\n.deco{background:rgba(255,255,255,.1);border:none;border-radius:8px;padding:8px 16px;color:#fff;font-size:13px;cursor:pointer}\n</style>\n</head>\n<body>\n<nav>\n  <div class=\"logo\">Sama<b>Bot</b></div>\n  <button class=\"deco\" id=\"deco\">Deconnexion</button>\n</nav>\n<div class=\"wrap\">\n  <h1>Mes bots</h1>\n  <div class=\"sub\" id=\"info\">Chargement...</div>\n  <div class=\"grid\" id=\"grid\"><div class=\"empty\">Chargement...</div></div>\n</div>\n<script>\ndocument.getElementById('deco').onclick = function() {\n  localStorage.clear();\n  window.location.href = '/login';\n};\n\nvar tk = localStorage.getItem('sb-token');\n\nvar hrf = window.location.href;\nvar tm = hrf.match(/[?&]token=([^&]+)/);\nif (tm && tm[1]) {\n  localStorage.setItem('sb-token', tm[1]);\n  var um = hrf.match(/[?&]user=([^&]+)/);\n  if (um && um[1]) {\n    try { localStorage.setItem('sb-user', decodeURIComponent(um[1])); } catch(e) {}\n  }\n  tk = tm[1];\n  history.replaceState({}, '', '/app');\n}\n\nif (!tk) {\n  window.location.href = '/login';\n} else {\n  fetch('/auth/my-bots', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) { return r.json(); })\n    .then(function(bots) {\n      var grid = document.getElementById('grid');\n      var info = document.getElementById('info');\n      if (!Array.isArray(bots)) {\n        info.textContent = bots.error || 'Erreur';\n        grid.innerHTML = '<div class=\"empty\">' + (bots.error || 'Erreur') + '</div>';\n        return;\n      }\n      info.textContent = bots.length + ' bot' + (bots.length !== 1 ? 's' : '');\n      var h = '';\n      for (var i = 0; i < bots.length; i++) {\n        var b = bots[i];\n        var av = b.logo_url\n          ? '<img src=\"' + b.logo_url + '\" style=\"width:42px;height:42px;border-radius:10px;object-fit:cover\" alt=\"\" />'\n          : '<div class=\"av\" style=\"background:' + (b.couleur || '#00c875') + '\">' + (b.emoji || '?') + '</div>';\n        h += '<div class=\"card\">';\n        h += '<div class=\"ch\">' + av + '<div><div class=\"cn\">' + b.nom + '</div><div class=\"cni\">' + b.niche + '</div></div></div>';\n        h += '<div class=\"cb\">';\n        h += '<a class=\"ba bo\" href=\"/chat/' + b.id + '\" target=\"_blank\">Chat</a>';\n        h += '<a class=\"ba bg\" href=\"/dashboard/' + b.id + '\">Dashboard</a>';\n        h += '</div></div>';\n      }\n      if (!bots.length) { h = '<div class=\"empty\">Pas encore de bot. Creez-en un!</div>'; }\n      h += '<div class=\"add\" id=\"addbtn\"><div style=\"font-size:32px\">+</div><div style=\"font-size:14px;font-weight:600;color:#5a7060\">Nouveau bot</div></div>';\n      grid.innerHTML = h;\n      document.getElementById('addbtn').onclick = function() { window.location.href = '/setup'; };\n    })\n    .catch(function(e) {\n      document.getElementById('info').textContent = 'Erreur: ' + e.message;\n    });\n}\n</script>\n</body>\n</html>";
+const appPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}\nnav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}\n.logo b{color:#00c875}\n.wrap{max-width:960px;margin:0 auto;padding:32px 20px}\nh1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}\n.sub{font-size:14px;color:#5a7060;margin-bottom:28px}\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}\n.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb;transition:all .2s}\n.card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}\n.ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}\n.av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}\n.cn{font-size:15px;font-weight:700;color:#0a1a0f}\n.cni{font-size:12px;color:#5a7060;text-transform:capitalize}\n.cb{display:flex;gap:6px}\n.ba{flex:1;padding:9px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;text-align:center;border:none;cursor:pointer;display:block;transition:opacity .15s}\n.ba:hover{opacity:.85}\n.bg{background:#00c875;color:#fff}\n.bo{background:#f0f4f1;color:#0a1a0f}\n.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;text-align:center;cursor:pointer;background:#f9fdf9;transition:all .2s}\n.add:hover{border-color:#00c875;background:rgba(0,200,117,.04)}\n.empty{text-align:center;padding:40px;color:#9ab0a0;font-size:14px}\n.deco{background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.15);border-radius:8px;padding:8px 16px;color:rgba(255,255,255,.8);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s}\n.deco:hover{background:rgba(255,255,255,.15);color:#fff}\n.pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}\n</style>\n</head>\n<body>\n<nav>\n  <div class=\"logo\">Sama<b>Bot</b></div>\n  <button class=\"deco\" id=\"deco\">Deconnexion</button>\n</nav>\n<div class=\"wrap\">\n  <h1>Mes bots</h1>\n  <div class=\"sub\" id=\"info\">Chargement...</div>\n  <div class=\"grid\" id=\"grid\"><div class=\"empty\">Chargement...</div></div>\n</div>\n<script>\n// 1. Logout\ndocument.getElementById('deco').onclick = function() {\n  localStorage.removeItem('sb-token');\n  localStorage.removeItem('sb-user');\n  fetch('/auth/logout', { method: 'POST' }).finally(function() {\n    window.location.replace('/login');\n  });\n};\n\n// 2. Recupere token depuis URL (Google OAuth / reset-password)\n(function() {\n  var hrf = window.location.href;\n  var tm = hrf.match(/[?&]token=([^&]+)/);\n  if (tm && tm[1]) {\n    localStorage.setItem('sb-token', tm[1]);\n    var um = hrf.match(/[?&]user=([^&]+)/);\n    if (um && um[1]) {\n      try { localStorage.setItem('sb-user', decodeURIComponent(um[1])); } catch(e) {}\n    }\n    history.replaceState({}, '', '/app');\n  }\n})();\n\n// 3. Verifie token via API avant d'afficher\nvar tk = localStorage.getItem('sb-token');\nif (!tk) {\n  window.location.replace('/login');\n} else {\n  // Valide le token cote serveur\n  fetch('/auth/test', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) { return r.json(); })\n    .then(function(d) {\n      if (!d.valid) {\n        localStorage.removeItem('sb-token');\n        localStorage.removeItem('sb-user');\n        window.location.replace('/login');\n        return;\n      }\n      // Token valide - charge les bots\n      loadBots();\n    })\n    .catch(function() {\n      loadBots(); // En cas d'erreur reseau, essaie quand meme\n    });\n}\n\nfunction loadBots() {\n  var grid = document.getElementById('grid');\n  var info = document.getElementById('info');\n  var tk = localStorage.getItem('sb-token');\n\n  fetch('/auth/my-bots', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) {\n      if (r.status === 401) {\n        localStorage.removeItem('sb-token');\n        window.location.replace('/login');\n        return null;\n      }\n      return r.json();\n    })\n    .then(function(bots) {\n      if (!bots) return;\n      if (!Array.isArray(bots)) {\n        info.textContent = bots.error || 'Erreur serveur';\n        grid.innerHTML = '<div class=\"empty\">' + (bots.error || 'Erreur') + '</div>';\n        return;\n      }\n      var userRaw = localStorage.getItem('sb-user') || '{}';\n      var user = {};\n      try { user = JSON.parse(userRaw); } catch(e) {}\n      info.innerHTML = '<span class=\"pill\">Plan ' + (user.plan || 'free') + '</span> &nbsp;' + bots.length + ' bot' + (bots.length !== 1 ? 's' : '');\n      var h = '';\n      for (var i = 0; i < bots.length; i++) {\n        var b = bots[i];\n        var av = b.logo_url\n          ? '<img src=\"' + b.logo_url + '\" style=\"width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0\" alt=\"\" />'\n          : '<div class=\"av\" style=\"background:' + (b.couleur || '#00c875') + '\">' + (b.emoji || '?') + '</div>';\n        h += '<div class=\"card\">';\n        h += '<div class=\"ch\">' + av + '<div><div class=\"cn\">' + b.nom + '</div><div class=\"cni\">' + b.niche + '</div></div></div>';\n        h += '<div class=\"cb\">';\n        h += '<a class=\"ba bo\" href=\"/chat/' + b.id + '\" target=\"_blank\">Chat</a>';\n        h += '<a class=\"ba bg\" href=\"/dashboard/' + b.id + '\">Dashboard</a>';\n        h += '</div></div>';\n      }\n      if (!bots.length) {\n        h = '<div class=\"empty\">Pas encore de bot. Creez votre premier bot!</div>';\n      }\n      h += '<div class=\"add\" id=\"addbtn\"><div style=\"font-size:28px;margin-bottom:6px\">+</div><div style=\"font-size:14px;font-weight:600;color:#5a7060\">Nouveau bot</div></div>';\n      grid.innerHTML = h;\n      document.getElementById('addbtn').onclick = function() { window.location.href = '/setup'; };\n    })\n    .catch(function(e) {\n      info.textContent = 'Erreur reseau';\n      grid.innerHTML = '<div class=\"empty\">Impossible de charger. Verifiez votre connexion.</div>';\n    });\n}\n</script>\n</body>\n</html>";
 
 const STORAGE_URL = `${CONFIG.SUPABASE_URL}/storage/v1`;
 const BUCKET = 'samabot-media';
@@ -1144,23 +1144,41 @@ app.post('/avis', async (req, res) => {
 // ============================================
 
 // Simple token generator (sans dépendance externe)
+const crypto = require('crypto');
+
 function generateToken(userId) {
-  const data = JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 });
-  // URL-safe base64 — remplace + par - et / par _
-  const payload = Buffer.from(data).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
-  return payload;
+  const header = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({userId, exp: Math.floor(Date.now()/1000) + 30*24*60*60})).toString('base64url');
+  const sig = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(header+'.'+payload).digest('base64url');
+  return header+'.'+payload+'.'+sig;
 }
 
 function verifyToken(token) {
   if (!token) return null;
   try {
-    // Restaure le base64 standard
-    const b64 = token.replace(/-/g,'+').replace(/_/g,'/');
-    const data = JSON.parse(Buffer.from(b64, 'base64').toString());
-    if (!data.userId || !data.exp) return null;
-    if (data.exp < Date.now()) return null;
+    const parts = (token||'').split('.');
+    if (parts.length !== 3) return null;
+    const [header, payload, sig] = parts;
+    const expected = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(header+'.'+payload).digest('base64url');
+    if (sig !== expected) return null;
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (data.exp < Math.floor(Date.now()/1000)) return null;
     return data.userId;
   } catch(e) { return null; }
+}
+
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ','');
+  const userId = verifyToken(token);
+  if (!userId) return res.status(401).json({ error:'Non autorisé' });
+  req.userId = userId;
+  next();
+}
+
+function authOptional(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ','');
+  req.userId = verifyToken(token) || null;
+  next();
 }
 
 // ============================================
@@ -1266,13 +1284,10 @@ app.post('/auth/login', async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// Mes bots
-app.get('/auth/my-bots', async (req, res) => {
+// Mes bots — protégé par auth
+app.get('/auth/my-bots', authMiddleware, async (req, res) => {
   try {
-    const token = req.headers.authorization?.replace('Bearer ','');
-    const userId = verifyToken(token);
-    if (!userId) return res.status(401).json({ error:'Non autorisé' });
-    const bots = await db.select('bots', `?user_id=eq.${userId}&actif=eq.true&order=created_at.desc`);
+    const bots = await db.select('bots', `?user_id=eq.${req.userId}&actif=eq.true&order=created_at.desc`);
     res.json(bots||[]);
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
@@ -2003,16 +2018,26 @@ app.post('/bot/create', async (req, res) => {
       livraison_delai: livraison_delai||'30-45 min',
       livraison_zones: livraison_zones||'Dakar',
       livraison_min:   livraison_min||0,
-      user_id:'00000000-0000-0000-0000-000000000001'
+      user_id: '00000000-0000-0000-0000-000000000001' // sera remplacé ci-dessous
     };
     botData.prompt = makePrompt(botData);
 
-    if (email) {
-      const ex = await db.select('users', `?email=eq.${email}`);
+    // Priorité: 1) token auth, 2) email fourni, 3) admin fallback
+    const authToken = req.headers.authorization?.replace('Bearer ','');
+    const authUserId = verifyToken(authToken);
+
+    if (authUserId) {
+      // Utilisateur connecté — lie le bot à son compte
+      botData.user_id = authUserId;
+    } else if (email) {
+      // Email fourni — trouve ou crée le user
+      const ex = await db.select('users', `?email=eq.${encodeURIComponent(email)}`);
       if (!ex?.length) {
         const nu = await db.insert('users', { email, nom:nom+' (owner)', plan:'starter' });
         if (nu?.[0]?.id) botData.user_id = nu[0].id;
-      } else botData.user_id = ex[0].id;
+      } else {
+        botData.user_id = ex[0].id;
+      }
     }
 
     await db.insert('bots', botData);
@@ -4179,11 +4204,16 @@ app.patch('/admin/user/:id/plan', async (req, res) => {
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
-// Test token (debug)
+// Logout (stateless mais utile pour uniformiser)
+app.post('/auth/logout', (req, res) => {
+  res.json({ success: true, message: 'Déconnecté' });
+});
+
+// Test token
 app.get('/auth/test', (req, res) => {
   const token = req.query.token || req.headers.authorization?.replace('Bearer ','');
   const userId = verifyToken(token);
-  res.json({ token: token?.substring(0,20)+'...', userId, valid: !!userId });
+  res.json({ valid: !!userId, userId: userId || null });
 });
 
 // Reset password (admin)
@@ -4351,7 +4381,7 @@ app.get('/webhook', (req,res) => {
 app.post('/webhook', (req,res) => res.sendStatus(200));
 
 app.get('/', (req,res) => res.json({
-  app:'🤖 SamaBot IA', version:'9.0', status:'active',
+  app:'🤖 SamaBot IA', version:'10.0', status:'active',
   features:['broadcasts','inbox-unifiee','workflow-automation','multi-langue','admin-dashboard','livraison-zones','auth-google','commande-flow','rendez-vous','geolocalisation','vocal-whisper','paiement-wave-om','catalogue-import','email-notifications','widget-universel']
 }));
 
