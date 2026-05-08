@@ -4338,146 +4338,139 @@ if(localStorage.getItem('sb-token'))window.location.href='/app';
 });
 
 app.get('/app', (req, res) => {
-  const base = CONFIG.BASE_URL;
   res.send(`<!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SamaBot — Mon espace</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}
-.nav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
-.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}.logo span{color:#00c875}
-.nav-r{display:flex;align-items:center;gap:10px}
-.u-name{font-size:13px;color:rgba(255,255,255,.55)}
-.btn-out{background:rgba(255,255,255,.08);border:none;border-radius:8px;padding:6px 14px;color:rgba(255,255,255,.55);font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s}
-.btn-out:hover{color:#fff;background:rgba(255,255,255,.15)}
+nav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}
+.logo span{color:#00c875}
 .wrap{max-width:960px;margin:0 auto;padding:32px 20px}
-.page-title{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
-.page-sub{font-size:14px;color:#5a7060;margin-bottom:28px}
+h1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}
+.sub{font-size:14px;color:#5a7060;margin-bottom:28px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.card{background:#fff;border-radius:14px;padding:20px;border:1px solid rgba(0,200,117,.1);transition:all .2s}
-.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08);border-color:rgba(0,200,117,.25)}
+.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb;transition:all .2s;cursor:pointer}
+.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)}
 .card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
-.card-logo{width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0}
 .card-ava{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-.card-name{font-size:15px;font-weight:700;color:#0a1a0f;line-height:1.2}
-.card-niche{font-size:12px;color:#5a7060;margin-top:2px;text-transform:capitalize}
-.card-stats{display:flex;gap:6px;margin-bottom:14px}
-.stat{background:#f0f4f1;border-radius:8px;padding:6px 10px;text-align:center;flex:1}
-.stat-val{font-size:16px;font-weight:800;color:#0a1a0f}
-.stat-lbl{font-size:10px;color:#9ab0a0;margin-top:1px}
-.card-btns{display:flex;gap:6px}
-.cb{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;text-align:center;border:none;transition:all .15s;display:block}
-.cb-g{background:#00c875;color:#fff}.cb-g:hover{background:#00a862}
-.cb-o{background:#f0f4f1;color:#0a1a0f}.cb-o:hover{background:#e5e7eb}
-.add-card{border:2px dashed rgba(0,200,117,.3);border-radius:14px;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all .2s;background:#f9fdf9}
-.add-card:hover{border-color:#00c875;background:rgba(0,200,117,.04)}
-.add-ico{font-size:32px}.add-txt{font-size:14px;font-weight:600;color:#5a7060}
+.card-logo{width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0}
+.card-name{font-size:15px;font-weight:700;color:#0a1a0f}
+.card-niche{font-size:12px;color:#5a7060;margin-top:2px}
+.btns{display:flex;gap:6px}
+.btn{flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;text-align:center;border:none;display:block}
+.btn-g{background:#00c875;color:#fff}
+.btn-o{background:#f0f4f1;color:#0a1a0f}
+.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;background:#f9fdf9}
+.add:hover{border-color:#00c875}
 .empty{text-align:center;padding:60px 20px;color:#9ab0a0}
-.empty-ico{font-size:48px;margin-bottom:12px}
-.empty-txt{font-size:15px;font-weight:600;margin-bottom:6px;color:#5a7060}
-.empty-sub{font-size:13px}
-.plan-pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;display:inline-block}
+.btn-out{background:rgba(255,255,255,.1);border:none;border-radius:8px;padding:8px 16px;color:#fff;font-size:13px;cursor:pointer;font-family:inherit}
+.btn-out:hover{background:rgba(255,255,255,.2)}
+#status{font-size:13px;color:#5a7060;margin-bottom:16px}
 </style>
 </head>
 <body>
-<div class="nav">
+<nav>
   <div class="logo">Sama<span>Bot</span></div>
-  <div class="nav-r">
-    <span class="u-name" id="u-name"></span>
-    <button class="btn-out" onclick="logout()">Déconnexion</button>
-  </div>
-</div>
+  <button class="btn-out" id="btn-logout">Deconnexion</button>
+</nav>
 <div class="wrap">
-  <div class="page-title">Mes bots 🤖</div>
-  <div class="page-sub" id="page-sub">Chargement...</div>
-  <div class="grid" id="grid"><div class="empty"><div class="empty-ico">⏳</div><div class="empty-txt">Chargement...</div></div></div>
+  <h1>Mes bots</h1>
+  <div class="sub" id="status">Chargement...</div>
+  <div class="grid" id="grid"></div>
 </div>
 <script>
-// ---- Fonctions définies EN PREMIER ----
-function logout(){
+// Deconnexion
+document.getElementById('btn-logout').addEventListener('click', function() {
   localStorage.removeItem('sb-token');
   localStorage.removeItem('sb-user');
-  window.location.href='/login';
-}
+  window.location.href = '/login';
+});
 
-// Récupère token depuis URL (Google OAuth callback ou reset-password)
-(function(){
-  try {
-    // Utilise location.href directement pour éviter les problèmes de parsing
-    var href = window.location.href;
-    var tokenMatch = href.match(/[?&]token=([^&]+)/);
-    var userMatch = href.match(/[?&]user=([^&]+)/);
-    if(tokenMatch && tokenMatch[1]){
-      var t = tokenMatch[1];
-      localStorage.setItem('sb-token', t);
-      if(userMatch && userMatch[1]){
-        try{ localStorage.setItem('sb-user', decodeURIComponent(userMatch[1])); }catch(e){}
-      }
-      // Nettoie l'URL après avoir sauvegardé
-      window.history.replaceState({},'','/app');
-    }
-  } catch(e) { console.error('Token parse error:', e); }
-})();
+// Recupere token depuis URL si present (apres Google OAuth)
+var href = window.location.href;
+var m = href.match(/[?&]token=([^&]+)/);
+var mu = href.match(/[?&]user=([^&]+)/);
+if (m && m[1]) {
+  localStorage.setItem('sb-token', m[1]);
+  if (mu && mu[1]) {
+    try { localStorage.setItem('sb-user', decodeURIComponent(mu[1])); } catch(e) {}
+  }
+  window.history.replaceState({}, '', '/app');
+}
 
 var token = localStorage.getItem('sb-token');
-var userRaw = localStorage.getItem('sb-user') || '{}';
-var user = {};
-try { user = JSON.parse(userRaw); } catch(e) {}
 
-if(!token){ window.location.href = '/login'; }
-else {
+if (!token) {
+  window.location.href = '/login';
+} else {
+  var userStr = localStorage.getItem('sb-user') || '{}';
+  var user = {};
+  try { user = JSON.parse(userStr); } catch(e) {}
 
-var nameEl = document.getElementById('u-name');
-if(nameEl) nameEl.textContent = user.nom || user.email || '';
-
-async function loadBots(){
-  var grid = document.getElementById('grid');
-  try{
-    var r = await fetch('/auth/my-bots', { headers:{ 'Authorization':'Bearer '+token } });
-    if(r.status === 401){ logout(); return; }
-    var bots = await r.json();
-
-    if(!Array.isArray(bots)){
-      grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+( bots.error||'Erreur serveur')+'</div></div>';
-      return;
-    }
-
-    var subEl = document.getElementById('page-sub');
-    if(subEl) subEl.innerHTML = '<span class="plan-pill">Plan '+(user.plan||'free')+'</span> &nbsp;'+bots.length+' bot'+(bots.length!==1?'s':'');
-
-    var html = '';
-    if(bots.length){
-      bots.forEach(function(b){
-        var logo = b.logo_url
-          ? '<img class="card-logo" src="'+b.logo_url+'" alt=""/>'
-          : '<div class="card-ava" style="background:'+(b.couleur||'#00c875')+'">'+(b.emoji||'🤖')+'</div>';
-        html += '<div class="card">'
-          + '<div class="card-head">'+logo+'<div><div class="card-name">'+b.nom+'</div><div class="card-niche">'+b.niche+'</div></div></div>'
-          + '<div class="card-btns">'
-          + '<a class="cb cb-o" href="/chat/'+b.id+'" target="_blank">💬 Chat</a>'
-          + '<a class="cb cb-g" href="/dashboard/'+b.id+'">📊 Dashboard</a>'
-          + '</div></div>';
-      });
-    } else {
-      html = '<div class="empty"><div class="empty-ico">🤖</div><div class="empty-txt">Pas encore de bot</div><div class="empty-sub">Créez votre premier assistant IA</div></div>';
-    }
-    html += '<div class="add-card" onclick="window.location.href=\'/setup\'"><div class="add-ico">➕</div><div class="add-txt">Nouveau bot</div></div>';
-    grid.innerHTML = html;
-  } catch(e){
-    grid.innerHTML = '<div class="empty"><div class="empty-ico">❌</div><div class="empty-txt">'+e.message+'</div></div>';
-  }
+  loadBots();
 }
 
-loadBots();
+function loadBots() {
+  var grid = document.getElementById('grid');
+  var status = document.getElementById('status');
+
+  fetch('/auth/my-bots', {
+    headers: { 'Authorization': 'Bearer ' + token }
+  })
+  .then(function(r) {
+    if (r.status === 401) {
+      localStorage.removeItem('sb-token');
+      window.location.href = '/login';
+      return null;
+    }
+    return r.json();
+  })
+  .then(function(bots) {
+    if (!bots) return;
+
+    status.textContent = bots.length + ' bot' + (bots.length !== 1 ? 's' : '');
+
+    var html = '';
+    for (var i = 0; i < bots.length; i++) {
+      var b = bots[i];
+      var img = b.logo_url
+        ? '<img class="card-logo" src="' + b.logo_url + '" alt=""/>'
+        : '<div class="card-ava" style="background:' + (b.couleur || '#00c875') + '">' + (b.emoji || '?') + '</div>';
+      html += '<div class="card">'
+        + '<div class="card-head">' + img + '<div><div class="card-name">' + b.nom + '</div><div class="card-niche">' + b.niche + '</div></div></div>'
+        + '<div class="btns">'
+        + '<a class="btn btn-o" href="/chat/' + b.id + '" target="_blank">Chat</a>'
+        + '<a class="btn btn-g" href="/dashboard/' + b.id + '">Dashboard</a>'
+        + '</div></div>';
+    }
+
+    if (!bots.length) {
+      html = '<div class="empty"><div style="font-size:48px;margin-bottom:12px">robot</div><div>Pas encore de bot</div></div>';
+    }
+
+    html += '<div class="add" onclick="window.location.href=\'/setup\'">'
+      + '<div style="font-size:32px">+</div>'
+      + '<div style="font-size:14px;font-weight:600;color:#5a7060">Nouveau bot</div>'
+      + '</div>';
+
+    grid.innerHTML = html;
+  })
+  .catch(function(e) {
+    status.textContent = 'Erreur: ' + e.message;
+    grid.innerHTML = '<div class="empty">Impossible de charger les bots</div>';
+  });
 }
 </script>
 </body>
 </html>`);
 });
+
 
 app.get('/webhook', (req,res) => {
   if(req.query['hub.mode']==='subscribe'&&req.query['hub.verify_token']===CONFIG.META_VERIFY_TOKEN)
