@@ -911,7 +911,7 @@ textarea.b-msg:focus{border-color:#00c875}
         <div class="conv-time">${new Date(c.last_message_at||c.created_at).toLocaleString('fr-FR')}</div>
       </div>
       <div class="conv-ava" style="width:8px;height:8px;background:#00c875;border-radius:50%;margin-top:6px"></div>
-    </div>`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
+    <div class="conv-item" onclick="loadConv('${c.id}','${c.session_id||''}',this)" data-session="${c.session_id||''}">`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
   </div>
 
   <div class="chat-area" id="chat-area">
@@ -972,8 +972,10 @@ async function sendReply(){
   if(!msg||!currentConvId)return;
   input.value='';
   try{
-    await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg,sessionId:currentConvId,fromDashboard:true})});
-    // Reload messages
+    // Use the session_id stored in data attribute, not the conv id
+    var convItem = document.querySelector('.conv-item.active');
+    var sessionId = convItem ? convItem.getAttribute('data-session') : currentConvId;
+    await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({botId,message:msg,sessionId:sessionId})});
     var btn=document.querySelector('.conv-item.active');
     if(btn)btn.click();
   }catch(e){alert('Erreur envoi');}
@@ -1828,7 +1830,7 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
       console.log(`📦 Commande auto-créée: ${cmd[0].numero} — ${total} FCFA`);
       await notifyPatron(botId, cmd[0]);
       // Confirmation au client si email dispo dans session
-      const sess = sessions.get(sessionId);
+      const sess = sessions[sessionId];
       if (sess?.clientEmail) sendConfirmationClient(botId, cmd[0], sess.clientEmail).catch(()=>{});
       // Met à jour avec infos client extraites des messages
       updateCommandeInfos(cmd[0].id, sessionId, botId).catch(()=>{});
@@ -1841,10 +1843,11 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
 // Extrait et sauvegarde les infos client depuis les messages de la session
 async function updateCommandeInfos(commandeId, sessionId, botId) {
   try {
-    // Récupère les derniers messages de la session
-    const msgs = await db.select('messages',
-      `?bot_id=eq.${botId}&conversation_id=in.(select id from conversations where session_id=eq.${sessionId})&role=eq.user&order=created_at.desc&limit=10`
-    );
+    // Récupère les messages de la session via conversations
+    const convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&select=id`);
+    if (!convs?.length) return;
+    const convId = convs[0].id;
+    const msgs = await db.select('messages', `?conversation_id=eq.${convId}&role=eq.user&order=created_at.desc&limit=10`);
     if (!msgs?.length) return;
 
     const fullText = msgs.map(m=>m.content).join(' ');
@@ -2625,32 +2628,18 @@ async function loadRdvListe(date){
   const r = await fetch("/rdv/creneaux/${bot.id}?date="+date);
   const data = await r.json();
   const el = document.getElementById('rdv-liste');
-
-  if(data.ferme){
-    el.innerHTML = '<div class="empty">'+data.message+'</div>';
-    return;
-  }
-
-  const rdvsConfirmes = await fetch("/rdv/semaine/${bot.id}").then(r=>r.json());
-
-  // Récupère les RDV confirmés pour cette date
-  const rdvsDate = await fetch("/rdv/creneaux/${bot.id}?date="+date).then(r=>r.json());
-
+  if(data.ferme){el.innerHTML='<div class="empty">'+data.message+'</div>';return;}
   const dateLabel = new Date(date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
-  el.innerHTML = '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
-
+  el.innerHTML='<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:12px;text-transform:capitalize">'+dateLabel+'</div>';
   if(!data.creneaux?.length){el.innerHTML+='<div class="empty">Aucun créneau ce jour</div>';return;}
-
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px';
-
-  data.creneaux.forEach(c => {
-    const btn = document.createElement('div');
-    btn.style.cssText = 'padding:10px;border-radius:8px;text-align:center;border:1.5px solid '+(c.disponible?'#d1e5d8':'#fee2e2')+';background:'+(c.disponible?'#fff':'#fef2f2');
-    btn.innerHTML = '<div style="font-size:14px;font-weight:700;color:'+(c.disponible?'#0a1a0f':'#ef4444')+'">'+c.heure+'</div><div style="font-size:10px;color:'+(c.disponible?'#00c875':'#ef4444');'font-weight:600;margin-top:2px">'+(c.disponible?'Libre':'Pris')+'</div>';
+  const grid=document.createElement('div');
+  grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px';
+  data.creneaux.forEach(function(c){
+    var btn=document.createElement('div');
+    btn.style.cssText='padding:10px;border-radius:8px;text-align:center;border:1.5px solid '+(c.disponible?'#d1e5d8':'#fee2e2')+';background:'+(c.disponible?'#fff':'#fef2f2');
+    btn.innerHTML='<div style="font-size:14px;font-weight:700;color:'+(c.disponible?'#0a1a0f':'#ef4444')+'">'+c.heure+'</div><div style="font-size:10px;color:'+(c.disponible?'#00c875':'#ef4444')+';font-weight:600;margin-top:2px">'+(c.disponible?'Libre':'Pris')+'</div>';
     grid.appendChild(btn);
   });
-
   el.appendChild(grid);
 }
 
