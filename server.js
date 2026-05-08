@@ -3420,7 +3420,6 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
     <div class="hd-nm">${bot.nom}</div>
     <div class="hd-st"><span class="hd-dot"></span>En ligne — wolof & français 🎤</div>
   </div>
-  <a href="/dashboard/${bot.id}" class="hd-dash" target="_blank">📊</a>
 </div>
 
 <div class="msgs" id="msgs">
