@@ -903,15 +903,14 @@ textarea.b-msg:focus{border-color:#00c875}
 <div class="inbox-wrap">
   <div class="conv-list" id="conv-list">
     ${convs?.length ? convs.map(c => `
-    <div class="conv-item" onclick="loadConv('${c.id}','${c.session_id||''}',this)">
+    <div class="conv-item" data-session="${c.session_id||''}" onclick="loadConv('${c.id}','${c.session_id||''}',this)">
       <div class="conv-ava">${c.session_id?.charAt(0)?.toUpperCase()||'?'}</div>
       <div style="flex:1;min-width:0">
         <div class="conv-name">${c.session_id||'Visiteur'}</div>
         <div class="conv-preview">Cliquez pour voir les messages</div>
         <div class="conv-time">${new Date(c.last_message_at||c.created_at).toLocaleString('fr-FR')}</div>
       </div>
-      <div class="conv-ava" style="width:8px;height:8px;background:#00c875;border-radius:50%;margin-top:6px"></div>
-    <div class="conv-item" onclick="loadConv('${c.id}','${c.session_id||''}',this)" data-session="${c.session_id||''}">`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
+    </div>`).join('') : '<div style="padding:20px;text-align:center;color:#9ab0a0;font-size:13px">Aucune conversation</div>'}
   </div>
 
   <div class="chat-area" id="chat-area">
@@ -1083,7 +1082,7 @@ app.delete('/workflow/:id', async (req, res) => {
 async function runWorkflows(botId, message, sessionId) {
   try {
     const workflows = await db.select('workflows', `?bot_id=eq.${botId}&actif=eq.true`);
-    if (!workflows?.length) return null;
+    if (!workflows?.length || !Array.isArray(workflows)) return null;
 
     const msgLower = message.toLowerCase();
 
@@ -2165,13 +2164,14 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     ${bot.logo_url?`<img class="bot-logo-sm" src="${bot.logo_url}" alt="${bot.nom}"/>`:`<div class="bot-ava-sm">${bot.emoji}</div>`}
     <span class="bot-nm">${bot.nom}</span>
   </div>
-  <div style="display:flex;align-items:center;gap:8px">
+  <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
     <div class="live"><span class="live-dot"></span>${t(lang,'online')}</div>
     <select onchange="changeLang(this.value)" style="padding:5px 8px;border-radius:8px;border:1px solid #d1e5d8;font-size:12px;font-family:inherit;background:#fff">
       <option value="fr" ${lang==='fr'?'selected':''}>🇫🇷 FR</option>
       <option value="en" ${lang==='en'?'selected':''}>🇬🇧 EN</option>
       <option value="pt" ${lang==='pt'?'selected':''}>🇵🇹 PT</option>
     </select>
+    <a href="/app" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 12px;color:#fff;font-size:12px;font-weight:600;text-decoration:none">← Mes bots</a>
   </div>
 </div>
 
