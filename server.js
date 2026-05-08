@@ -1143,15 +1143,19 @@ app.post('/avis', async (req, res) => {
 
 // Simple token generator (sans dépendance externe)
 function generateToken(userId) {
-  const payload = Buffer.from(JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 })).toString('base64');
-  const sig = Buffer.from(userId + CONFIG.JWT_SECRET).toString('base64').substring(0,16);
-  return `${payload}.${sig}`;
+  const data = JSON.stringify({ userId, exp: Date.now() + 30*24*60*60*1000 });
+  // URL-safe base64 — remplace + par - et / par _
+  const payload = Buffer.from(data).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  return payload;
 }
 
 function verifyToken(token) {
+  if (!token) return null;
   try {
-    const [payload] = token.split('.');
-    const data = JSON.parse(Buffer.from(payload, 'base64').toString());
+    // Restaure le base64 standard
+    const b64 = token.replace(/-/g,'+').replace(/_/g,'/');
+    const data = JSON.parse(Buffer.from(b64, 'base64').toString());
+    if (!data.userId || !data.exp) return null;
     if (data.exp < Date.now()) return null;
     return data.userId;
   } catch(e) { return null; }
@@ -1221,10 +1225,9 @@ app.get('/auth/google/callback', async (req, res) => {
     if (!user) return res.redirect('/login?error=user_create');
 
     const token = generateToken(user.id);
-    const userObj = { id:user.id, email:user.email, nom:user.nom, plan:user.plan };
-    const safeToken = encodeURIComponent(token);
-    const safeUser = encodeURIComponent(JSON.stringify(userObj));
-    res.redirect(`/app?token=${safeToken}&user=${safeUser}`);
+    const userStr = encodeURIComponent(JSON.stringify({ id:user.id, email:user.email, nom:user.nom, plan:user.plan }));
+    // Token est déjà URL-safe (base64url), pas besoin de l'encoder
+    res.redirect(`/app?token=${token}&user=${userStr}`);
   } catch(e) {
     console.error('Google OAuth error:', e.message);
     res.redirect('/login?error=server');
@@ -4174,7 +4177,35 @@ app.patch('/admin/user/:id/plan', async (req, res) => {
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
-// Admin — désactiver un bot
+// Test token (debug)
+app.get('/auth/test', (req, res) => {
+  const token = req.query.token || req.headers.authorization?.replace('Bearer ','');
+  const userId = verifyToken(token);
+  res.json({ token: token?.substring(0,20)+'...', userId, valid: !!userId });
+});
+
+// Reset password (admin)
+app.get('/admin/reset-password', async (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET) return res.status(401).send('Non autorisé');
+  try {
+    const { email, password } = req.query;
+    if (!email || !password) return res.status(400).send('email et password requis');
+    const passHash = Buffer.from(password + CONFIG.JWT_SECRET).toString('base64');
+    await db.update('users', { password_hash: passHash }, `?email=eq.${encodeURIComponent(email)}`);
+    // Génère aussi un token direct pour tester
+    const users = await db.select('users', `?email=eq.${encodeURIComponent(email)}`);
+    const user = users?.[0];
+    const token = user ? generateToken(user.id) : null;
+    res.send(`
+      <h2>✅ Mot de passe mis à jour pour ${email}</h2>
+      <p>Token de test: <code>${token?.substring(0,30)}...</code></p>
+      <p><a href="/app?token=${token}&user=${encodeURIComponent(JSON.stringify({id:user?.id,email,nom:user?.nom,plan:user?.plan}))}">👉 Aller sur /app directement</a></p>
+      <p><a href="/login">Ou se connecter normalement</a></p>
+    `);
+  } catch(e) { res.status(500).send('Erreur: ' + e.message); }
+});
+
+
 app.patch('/admin/bot/:id/toggle', async (req, res) => {
   if (req.headers['x-admin-secret'] !== ADMIN_SECRET)
     return res.status(401).json({ error:'Non autorisé' });
@@ -4246,18 +4277,27 @@ input:focus{border-color:#00c875}
   </div>
   <div id="msg" class="msg"></div>
   <div id="form-login" class="form active">
-    <label>Email</label><input id="l-email" type="email" placeholder="votre@email.com"/>
-    <label>Mot de passe</label><input id="l-pass" type="password" placeholder="••••••••"/>
+    <label>Email</label><input id="l-email" type="email" placeholder="votre@email.com" style="width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;margin-bottom:14px;color:#0a1a0f"/>
+    <label>Mot de passe</label>
+    <div style="position:relative;margin-bottom:14px">
+      <input id="l-pass" type="password" placeholder="••••••••" style="width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 44px 10px 14px;font-size:14px;font-family:inherit;outline:none;color:#0a1a0f"/>
+      <button onclick="togglePwd('l-pass',this)" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:#9ab0a0">👁️</button>
+    </div>
     <button class="btn" id="l-btn" onclick="login()">Se connecter →</button>
   </div>
   <div id="form-register" class="form">
-    <label>Nom</label><input id="r-nom" placeholder="Votre nom"/>
-    <label>Email</label><input id="r-email" type="email" placeholder="votre@email.com"/>
-    <label>Mot de passe</label><input id="r-pass" type="password" placeholder="6 caractères minimum"/>
+    <label>Nom</label><input id="r-nom" placeholder="Votre nom" style="width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;margin-bottom:14px;color:#0a1a0f"/>
+    <label>Email</label><input id="r-email" type="email" placeholder="votre@email.com" style="width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;margin-bottom:14px;color:#0a1a0f"/>
+    <label>Mot de passe</label>
+    <div style="position:relative;margin-bottom:14px">
+      <input id="r-pass" type="password" placeholder="6 caractères minimum" style="width:100%;border:1.5px solid #d1e5d8;border-radius:10px;padding:10px 44px 10px 14px;font-size:14px;font-family:inherit;outline:none;color:#0a1a0f"/>
+      <button onclick="togglePwd('r-pass',this)" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:#9ab0a0">👁️</button>
+    </div>
     <button class="btn" id="r-btn" onclick="register()">Créer mon compte →</button>
   </div>
 </div>
 <script>
+function togglePwd(id,btn){var i=document.getElementById(id);i.type=i.type==='password'?'text':'password';btn.textContent=i.type==='password'?'👁️':'🙈';}
 function showTab(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.form').forEach(f=>f.classList.remove('active'));el.classList.add('active');document.getElementById('form-'+id).classList.add('active');hide();}
 function show(msg,type){var e=document.getElementById('msg');e.textContent=msg;e.className='msg show '+type;}
 function hide(){var e=document.getElementById('msg');e.className='msg';}
@@ -4371,11 +4411,12 @@ function logout(){
     var t = params.get('token');
     var u = params.get('user');
     if(t){
-      localStorage.setItem('sb-token', decodeURIComponent(t));
+      // Token est URL-safe base64 — pas besoin de décoder
+      localStorage.setItem('sb-token', t);
       if(u){ try{ localStorage.setItem('sb-user', decodeURIComponent(u)); }catch(e){} }
       window.history.replaceState({},'','/app');
     }
-  } catch(e) {}
+  } catch(e) { console.error('Token parse error:', e); }
 })();
 
 var token = localStorage.getItem('sb-token');
