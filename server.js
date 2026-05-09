@@ -435,7 +435,7 @@ app.post('/chat', async (req, res) => {
 
     // Extrait le total — supporte: "Total: 5 000 FCFA" "Total : 5000 FCFA." "5 000 FCFA"
     let orderTotal = 0;
-    const totalMatch = reply.match(/total\s*[:\-]\s*([0-9][0-9\s]*)\s*f?cfa/i) ||
+    const totalMatch = reply.match(/total\s*[:\-]\s*\*?\s*([0-9][0-9\s]*)\s*\*?\s*f?cfa/i) ||
                        reply.match(/total\s*[:\-]\s*([0-9\s]+)/i) ||
                        reply.match(/([0-9][0-9\s]{2,})\s*f?cfa/i);
     if (totalMatch) {
@@ -443,14 +443,38 @@ app.post('/chat', async (req, res) => {
       if (extracted > 0 && extracted < 10000000) orderTotal = extracted;
     }
 
-    // Si total détecté ET adresse déjà donnée → boutons paiement
+    // 🆕 Nouveau flux: ne crée la commande QU'À LA CONFIRMATION du client
+    // Détection de la confirmation: le CLIENT a tapé "oui", "confirme", "valider"... 
+    // ET le bot a précédemment fait un récapitulatif (présence de "récapitulatif" dans l'historique)
+    const confirmationKeywords = /^\s*(oui|ouais|yes|ok|d'accord|confirme[rz]?|valide[rz]?|c'est bon|c bon|parfait|allez[\s-]?y|go|waaw|d'acc)\b/i;
+    const isClientConfirming = confirmationKeywords.test(message.trim());
+
+    // Vérifier dans l'historique si le bot a déjà fait un récapitulatif AVANT ce nouveau reply
+    // (callAI a déjà ajouté le nouveau reply à l'history, donc on prend l'avant-dernier message assistant)
+    const history = getHist(sid);
+    const assistantMsgs = history.filter(h => h.role === 'assistant');
+    // L'avant-dernier message assistant = celui auquel le client est en train de répondre
+    const previousBotMsg = assistantMsgs.length >= 2 ? assistantMsgs[assistantMsgs.length - 2] : null;
+    const lastBotHadRecap = previousBotMsg && /récapitulatif|recapitulatif|recap|confirmez-vous/i.test(previousBotMsg.content);
+
+    // Affiche les boutons paiement quand on a un total
     if (orderTotal > 0) {
       console.log(`💰 Total détecté: ${orderTotal} FCFA pour bot ${botId}`);
       intents.push('payment');
-      // Crée la commande automatiquement et envoie email
-      autoCreateCommande(botId, sid, orderTotal, bot).catch(e=>console.error('autoCommande err:',e));
-    } else {
-      console.log(`⚠️ Pas de total détecté dans: "${reply.substring(0,100)}"`);
+    }
+
+    // 🎯 Création commande UNIQUEMENT quand: client confirme APRÈS récap du bot
+    if (isClientConfirming && lastBotHadRecap) {
+      console.log(`✅ Confirmation client détectée pour bot ${botId} — création commande`);
+      // On extrait le total depuis le récap du bot (previousBotMsg)
+      let totalFromRecap = 0;
+      const recapTotalMatch = previousBotMsg.content.match(/total[^:]*[:\s]*\*?\s*([0-9][0-9\s]*)\s*\*?\s*f?cfa/i);
+      if (recapTotalMatch) {
+        totalFromRecap = parseInt(recapTotalMatch[1].replace(/\s/g,'')) || 0;
+      }
+      const finalTotal = totalFromRecap || orderTotal || 0;
+      // Crée la commande + envoie TOUTES les notifs (patron + client) en une fois
+      createOrderFromConfirmation(botId, sid, finalTotal, bot, previousBotMsg.content).catch(e=>console.error('createOrder err:', e.message));
     }
 
     // Si commande sans total encore → GPS pour adresse
@@ -462,20 +486,6 @@ app.post('/chat', async (req, res) => {
     const catalogue = (intents.includes('catalogue') && bot.catalogue?.length) ? bot.catalogue.slice(0,8) : null;
 
     saveMsg(botId, sid, message, reply).catch(()=>{});
-
-    // ✨ Si le message contient des infos client (email/tel/nom/adresse) ET qu'une commande pending existe,
-    // on met à jour les infos APRÈS un petit délai (pour que saveMsg ait fini)
-    const hasClientInfo = /@|7[05678]\d|\+\d{8,}|je m'appelle|je suis|mon nom|adresse|j'habite|livraison/i.test(message);
-    if (hasClientInfo) {
-      setTimeout(async () => {
-        try {
-          const pending = await db.select('commandes', `?bot_id=eq.${botId}&session_id=eq.${sid}&statut=eq.pending&order=created_at.desc&limit=1`);
-          if (pending?.[0]) {
-            updateCommandeInfos(pending[0].id, sid, botId).catch(()=>{});
-          }
-        } catch(e) {}
-      }, 800);
-    }
 
     res.json({ reply, actions, catalogue, intents });
   } catch(err) {
@@ -1923,23 +1933,160 @@ async function sendConfirmationRdvClient(botId, rdv, clientEmail) {
 
 
 async function notifyNouveauMessage(botId, message) {
-  try {
-    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_email,notifications_phone,messages_count`);
-    const bot = bots?.[0];
-    if (!bot) return;
-
-    // Notifie seulement tous les 5 messages pour ne pas spammer
-    if ((bot.messages_count || 0) % 5 !== 0) return;
-
-    if (bot.notifications_phone) {
-      const msg = `💬 *SamaBot — Nouveaux messages*\n\n${bot.nom} a reçu des messages.\n\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
-      await sendWhatsApp(bot.notifications_phone, msg);
-    }
-  } catch(e) {}
+  // Désactivé pour éviter de spammer le patron à chaque message
+  // Les notifs WhatsApp ne sont envoyées que pour: nouvelle commande, RDV, statut commande
+  return;
 }
 
 // ============================================
-// AUTO COMMANDE — Créée automatiquement quand total détecté
+// CRÉATION COMMANDE — Sur confirmation explicite du client
+// Extrait les infos client depuis le récap du bot, crée la commande complète,
+// et envoie TOUTES les notifs (patron + client, email + WhatsApp) en UN SEUL appel
+// ============================================
+async function createOrderFromConfirmation(botId, sessionId, total, bot, recapText) {
+  try {
+    // Vérifie si une commande a déjà été créée récemment pour cette session (anti-doublon)
+    const existing = await db.select('commandes', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&order=created_at.desc&limit=1`);
+    if (existing?.[0]) {
+      const ageMs = Date.now() - new Date(existing[0].created_at).getTime();
+      if (ageMs < 60000) { // moins d'1 min: c'est probablement la même commande
+        console.log(`⚠️ Commande récente déjà créée (${existing[0].numero}), skip`);
+        return;
+      }
+    }
+
+    // Extraire les infos client depuis le RÉCAP du bot (plus fiable que parser les messages)
+    const infos = extractInfosFromRecap(recapText);
+    // Compléter avec les infos depuis l'historique des messages si manquant
+    const fromMessages = await extractInfosFromMessages(botId, sessionId);
+    const finalInfos = {
+      client_nom: infos.nom || fromMessages.nom || null,
+      client_tel: infos.tel || fromMessages.tel || null,
+      client_email: infos.email || fromMessages.email || null,
+      adresse_livraison: infos.adresse || fromMessages.adresse || null,
+      article: infos.article || null,
+    };
+
+    console.log(`📦 Création commande pour bot ${botId}:`, JSON.stringify(finalInfos));
+
+    // Créer la commande
+    const cmdData = {
+      bot_id: botId,
+      session_id: sessionId,
+      items: finalInfos.article ? [{ nom: finalInfos.article }] : [],
+      total: total || 0,
+      statut: 'pending',
+      methode_paiement: 'en attente',
+      client_nom: finalInfos.client_nom,
+      client_tel: finalInfos.client_tel,
+      client_email: finalInfos.client_email,
+      adresse_livraison: finalInfos.adresse_livraison,
+    };
+    // Retire les null pour ne pas écraser les valeurs par défaut DB
+    Object.keys(cmdData).forEach(k => cmdData[k] == null && delete cmdData[k]);
+
+    const cmd = await db.insert('commandes', cmdData);
+    if (!cmd?.[0]) {
+      console.error('❌ Échec création commande');
+      return;
+    }
+    const commande = cmd[0];
+    console.log(`✅ Commande créée: ${commande.numero} — ${total} FCFA`);
+
+    // 📧📱 NOTIFICATIONS PATRON (1 email + 1 WhatsApp seulement)
+    notifyPatron(botId, commande).catch(e => console.error('notifyPatron:', e.message));
+
+    // 📧 EMAIL CLIENT (si email donné)
+    if (commande.client_email) {
+      sendConfirmationClient(botId, commande, commande.client_email).catch(e => console.error('emailClient:', e.message));
+    } else {
+      console.log('ℹ️ Pas d\'email client → pas d\'email de confirmation');
+    }
+
+    // 📱 WHATSAPP CLIENT (si tel donné)
+    if (commande.client_tel) {
+      sendWhatsAppClientConfirmation(botId, commande).catch(e => console.error('waClient:', e.message));
+    } else {
+      console.log('ℹ️ Pas de tel client → pas de WhatsApp de confirmation');
+    }
+
+  } catch(e) {
+    console.error('createOrderFromConfirmation:', e.message);
+  }
+}
+
+// Helper: extrait les infos client depuis le texte du récapitulatif du bot
+function extractInfosFromRecap(text) {
+  if (!text) return {};
+  const get = (re) => {
+    const m = text.match(re);
+    return m ? m[1].trim() : null;
+  };
+  return {
+    nom: get(/(?:nom|prénom)\s*[:\-]\s*\*?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'-]{1,40}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰)/i),
+    tel: (function(){
+      const m = text.match(/(?:téléphone|telephone|tel|phone)\s*[:\-]\s*\*?\s*([+\d][\d\s.\-+()]{6,20})\s*\*?/i);
+      if (!m) return null;
+      let tel = m[1].replace(/[\s.\-()]/g,'');
+      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
+      else if (!tel.startsWith('+') && tel.length >= 9) tel = '+' + tel.replace(/^00/,'');
+      return tel;
+    })(),
+    email: (function(){
+      const m = text.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
+      return m ? m[0].toLowerCase() : null;
+    })(),
+    adresse: get(/(?:adresse|livraison)\s*[:\-]\s*\*?\s*([^\n*📞📧🛍️💰🛵👤]{5,150}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i),
+    article: get(/(?:article|produit|commande)\s*[:\-]\s*\*?\s*([^\n*📞📧💰🛵👤📍]{2,100}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i),
+  };
+}
+
+// Helper: extrait les infos client depuis l'historique des messages user (fallback)
+async function extractInfosFromMessages(botId, sessionId) {
+  try {
+    const convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&select=id`);
+    if (!convs?.length) return {};
+    const msgs = await db.select('messages', `?conversation_id=eq.${convs[0].id}&role=eq.user&order=created_at.desc&limit=15`);
+    if (!msgs?.length) return {};
+    const fullText = msgs.map(m => m.content).join(' ');
+
+    const emailMatch = fullText.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
+    const telMatch = fullText.match(/\+\d{8,15}/) ||
+                     fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/);
+    const adresseMatch = fullText.match(/(?:Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*)([^(.\n]+)/i) ||
+                         fullText.match(/(?:adresse|j'habite|livraison)\s*[:à]?\s*([^(.\n]{5,80})/i);
+    const nomMatch = fullText.match(/(?:je m'appelle|je suis|c'est|mon (?:nom|prénom)(?:\s+est)?|moi c'est)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
+
+    const out = {};
+    if (emailMatch) out.email = emailMatch[0].toLowerCase();
+    if (telMatch) {
+      let tel = telMatch[0].replace(/[\s.\-()]/g,'');
+      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
+      out.tel = tel;
+    }
+    if (adresseMatch) out.adresse = adresseMatch[1].trim().substring(0,200);
+    if (nomMatch) {
+      const n = nomMatch[1].trim();
+      if (n.length > 1 && !/^(le|la|les|un|une|et|ou|de)$/i.test(n)) out.nom = n;
+    }
+    return out;
+  } catch(e) { return {}; }
+}
+
+// Envoie un WhatsApp de confirmation au client
+async function sendWhatsAppClientConfirmation(botId, cmd) {
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,livraison_delai`);
+    const bot = bots?.[0];
+    if (!bot) return;
+    const total = (cmd.total||0).toLocaleString('fr-FR');
+    const msg = `✅ *${bot.nom}*\n\nVotre commande *${cmd.numero}* est confirmée!\n\n💰 Total: *${total} FCFA*\n${cmd.adresse_livraison?`📍 Livraison: ${cmd.adresse_livraison}\n`:''}🛵 Délai: ${bot.livraison_delai||'30-45 min'}\n\nNous vous tiendrons informé de l'avancement. Jërëjëf 🙏`;
+    await sendWhatsApp(cmd.client_tel, msg);
+  } catch(e) { console.error('sendWhatsAppClientConfirmation:', e.message); }
+}
+
+// ============================================
+// AUTO COMMANDE — DÉPRÉCIÉ mais conservé pour compat (autres flux comme webhook WhatsApp)
 // ============================================
 async function autoCreateCommande(botId, sessionId, total, bot) {
   try {
@@ -1959,9 +2106,6 @@ async function autoCreateCommande(botId, sessionId, total, bot) {
     if (cmd?.[0]) {
       console.log(`📦 Commande auto-créée: ${cmd[0].numero} — ${total} FCFA`);
       await notifyPatron(botId, cmd[0]);
-      // Confirmation au client si email dispo dans session
-      const sess = sessions[sessionId];
-      if (sess?.clientEmail) sendConfirmationClient(botId, cmd[0], sess.clientEmail).catch(()=>{});
       // Met à jour avec infos client extraites des messages
       updateCommandeInfos(cmd[0].id, sessionId, botId).catch(()=>{});
     }
@@ -1999,7 +2143,6 @@ async function updateCommandeInfos(commandeId, sessionId, botId) {
     if (emailMatch) updates.client_email = emailMatch[0].toLowerCase();
     if (telMatch) {
       let tel = telMatch[0].replace(/[\s.-]/g,'');
-      // Si numéro sénégalais sans indicatif, ajouter +221
       if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
       else if (/^00/.test(tel)) tel = '+' + tel.substring(2);
       else if (!tel.startsWith('+') && tel.length >= 9) tel = '+221' + tel.replace(/^221/,'');
@@ -2007,45 +2150,19 @@ async function updateCommandeInfos(commandeId, sessionId, botId) {
     }
     if (adresseMatch) {
       const addr = adresseMatch[1].trim().substring(0, 200);
-      // N'écrase pas une adresse GPS plus complète
       if (addr.length > 4) updates.adresse_livraison = addr;
     }
     if (nomMatch) {
       const nom = nomMatch[1].trim();
-      // Évite les faux positifs trop courts ou communs
       if (nom.length > 1 && !/^(le|la|les|un|une|et|ou|de)$/i.test(nom)) {
         updates.client_nom = nom;
       }
     }
 
+    // Mise à jour silencieuse — pas de re-notification (évite les doublons)
     if (Object.keys(updates).length > 0) {
       await db.update('commandes', updates, `?id=eq.${commandeId}`);
-      console.log(`👤 Infos client mises à jour:`, updates);
-
-      // Re-notifie le patron avec les vraies infos client (WhatsApp seulement, pour éviter spam email)
-      try {
-        const cmds = await db.select('commandes', `?id=eq.${commandeId}`);
-        const cmd = cmds?.[0];
-        if (cmd) {
-          const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone,couleur,emoji`);
-          const bot = bots?.[0];
-          if (bot?.notifications_phone) {
-            const total = (cmd.total||0).toLocaleString('fr-FR');
-            const msg = `✅ *Commande complétée!*\n\n📦 *${cmd.numero}*\n💰 ${total} FCFA\n${cmd.client_nom?`👤 ${cmd.client_nom}\n`:''}${cmd.client_tel?`📞 ${cmd.client_tel}\n`:''}${cmd.adresse_livraison?`📍 ${cmd.adresse_livraison}\n`:''}\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
-            await sendWhatsApp(bot.notifications_phone, msg);
-          }
-          // Envoie confirmation au client (email + WhatsApp) si infos disponibles
-          if (cmd.client_email) {
-            sendConfirmationClient(botId, cmd, cmd.client_email).catch(()=>{});
-          }
-          if (cmd.client_tel) {
-            const bots2 = await db.select('bots', `?id=eq.${botId}&select=nom`);
-            const botNom = bots2?.[0]?.nom || 'Notre service';
-            const clientMsg = `✅ *${botNom}*\n\nVotre commande *${cmd.numero}* a bien été reçue!\n\n💰 Total: *${(cmd.total||0).toLocaleString('fr-FR')} FCFA*\n${cmd.adresse_livraison?`📍 Livraison: ${cmd.adresse_livraison}\n`:''}\nNous vous tiendrons informé(e) de l'avancement. Jërëjëf 🙏`;
-            sendWhatsApp(cmd.client_tel, clientMsg).catch(()=>{});
-          }
-        }
-      } catch(e2) { console.error('re-notify error:', e2.message); }
+      console.log(`👤 Infos client mises à jour (silencieux):`, updates);
     }
   } catch(e) { console.error('updateCommandeInfos:', e.message); }
 }
@@ -2122,26 +2239,42 @@ ${bot.services?`- Services: ${bot.services}`:''}
 ${cat}
 ${livraison}
 
-RÈGLES STRICTES — respecte CET ORDRE EXACT:
+FLUX DE COMMANDE STRICT — respecte CET ORDRE EXACT:
+
 ÉTAPE 1 — Client veut commander:
-  → Liste les articles disponibles avec tirets et prix
-  → Demande ce qu'il veut commander
+  → Liste les articles avec tirets et prix
+  → Demande ce qu'il veut
 
 ÉTAPE 2 — Client choisit un article:
-  → Récapitule: "Votre commande: [article] = [prix] FCFA${bot.livraison_actif?`, livraison: ${(bot.livraison_frais||0).toLocaleString('fr-FR')} FCFA`:''}"
-  → Indique le TOTAL exact: "Total: [montant] FCFA"
-  → Demande prénom + téléphone + adresse: "Quel est votre prénom, numéro de téléphone et adresse de livraison? (Le bouton GPS ci-dessous vous facilite la tâche)"
+  → Annonce les détails: "Votre commande: [article] = [prix] FCFA${bot.livraison_actif?`, livraison: ${(bot.livraison_frais||0).toLocaleString('fr-FR')} FCFA, total: [total] FCFA`:''}"
+  → Demande SES INFORMATIONS: "Pour finaliser, j'ai besoin de:\\n• Votre prénom\\n• Votre numéro de téléphone\\n• Votre adresse de livraison (utilisez le bouton GPS ci-dessous)\\n• Votre email (optionnel, pour la confirmation)"
 
 ÉTAPE 3 — Client donne ses infos:
-  → Confirme: "✅ Commande confirmée! Livraison à [adresse] dans ${bot.livraison_delai||'30-45 min'}, [prénom]"
-  → Propose les paiements: "Vous pouvez payer par Wave, Orange Money ou à la livraison"
+  → Fais un RÉCAPITULATIF COMPLET avec ce format EXACT:
+    "📋 *Récapitulatif de votre commande:*\\n
+    👤 Nom: [prénom]\\n
+    📞 Téléphone: [numéro]\\n
+    📍 Adresse: [adresse]\\n
+    📧 Email: [email ou 'non fourni']\\n
+    🛍️ Article: [article]\\n
+    💰 *Total: [montant] FCFA*\\n
+    🛵 Livraison: ${bot.livraison_delai||'30-45 min'}\\n\\n
+    Confirmez-vous votre commande? Répondez *OUI* pour valider ou dites-moi ce qu'il faut modifier."
 
-RÈGLES GÉNÉRALES:
+ÉTAPE 4 — Client confirme (dit "oui", "confirme", "valider", "c'est bon", etc.):
+  → Réponds EXACTEMENT: "✅ *Commande confirmée!* Référence: à venir. Vous allez recevoir une confirmation par email/WhatsApp. Comment souhaitez-vous payer?"
+  → Propose les paiements: Wave, Orange Money, à la livraison
+
+ÉTAPE 5 — Client choisit le paiement:
+  → Confirme la méthode: "Parfait! Paiement par [méthode] noté."
+  → Donne le délai final: "Votre commande sera livrée dans ${bot.livraison_delai||'30-45 min'}. Jërëjëf!"
+
+RÈGLES IMPORTANTES:
+- TOUJOURS faire le RÉCAPITULATIF avant de demander confirmation (étape 3)
+- Ne JAMAIS sauter l'étape de confirmation (étape 4)
+- Si le client n'a pas donné toutes les infos, redemande les manquantes avant de récapituler
+- Si le client modifie quelque chose, refais le récap complet
 - TOUJOURS lister produits/services avec tirets (- Article: prix FCFA)
-- Ne JAMAIS confirmer sans adresse de livraison
-- Adresse GPS → mentionner le bouton ci-dessous
-- Téléphone → mentionner le bouton d'appel
-- RDV → mentionner le calendrier ci-dessous
 - En wolof: utiliser "Jerejef", "Waaw", "Asalaa maalekum" naturellement`;
 }
 function makeBotId(nom) {
