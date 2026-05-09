@@ -762,6 +762,112 @@ app.post('/import/sync/:botId', async (req, res) => {
 });
 
 // ============================================
+// CATALOGUE CRUD — Gestion des produits
+// ============================================
+
+// Helper: récupère le catalogue actuel d'un bot
+async function getCatalogue(botId) {
+  const bots = await db.select('bots', `?id=eq.${botId}&select=catalogue`);
+  if (!bots?.[0]) return null;
+  const cat = bots[0].catalogue;
+  return Array.isArray(cat) ? cat : [];
+}
+
+// Helper: sauvegarde le catalogue + reconstruit le prompt
+async function saveCatalogue(botId, catalogue) {
+  await db.update('bots', {
+    catalogue: catalogue,
+    updated_at: new Date().toISOString()
+  }, `?id=eq.${botId}`);
+  // Rebuild le prompt avec le nouveau catalogue
+  const bots = await db.select('bots', `?id=eq.${botId}`);
+  if (bots?.[0]) {
+    const newPrompt = makePrompt(bots[0]);
+    await db.update('bots', { prompt: newPrompt }, `?id=eq.${botId}`);
+  }
+}
+
+// GET /catalogue/:botId — Liste des produits d'un bot
+app.get('/catalogue/:botId', async (req, res) => {
+  try {
+    const cat = await getCatalogue(req.params.botId);
+    if (cat === null) return res.status(404).json({ error: 'Bot non trouvé' });
+    res.json({ catalogue: cat, count: cat.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /catalogue/:botId — Ajouter un produit
+app.post('/catalogue/:botId', async (req, res) => {
+  try {
+    const { nom, prix, desc, image, emoji } = req.body;
+    if (!nom || prix === undefined || prix === null) return res.status(400).json({ error: 'nom et prix requis' });
+    const prixNum = parseInt(prix);
+    if (isNaN(prixNum) || prixNum < 0) return res.status(400).json({ error: 'prix invalide' });
+
+    const cat = await getCatalogue(req.params.botId);
+    if (cat === null) return res.status(404).json({ error: 'Bot non trouvé' });
+
+    const nouveau = {
+      id: 'p_' + Date.now().toString(36),
+      nom: String(nom).substring(0, 100),
+      prix: prixNum,
+      desc: desc ? String(desc).substring(0, 200) : '',
+      image: image || null,
+      emoji: emoji || '🛍️',
+      actif: true
+    };
+    cat.push(nouveau);
+    await saveCatalogue(req.params.botId, cat);
+    console.log(`✅ Produit ajouté à ${req.params.botId}: ${nouveau.nom}`);
+    res.json({ success: true, produit: nouveau, total: cat.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /catalogue/:botId/:produitIndex — Modifier un produit
+app.patch('/catalogue/:botId/:produitIndex', async (req, res) => {
+  try {
+    const idx = parseInt(req.params.produitIndex);
+    if (isNaN(idx) || idx < 0) return res.status(400).json({ error: 'Index invalide' });
+
+    const cat = await getCatalogue(req.params.botId);
+    if (cat === null) return res.status(404).json({ error: 'Bot non trouvé' });
+    if (idx >= cat.length) return res.status(404).json({ error: 'Produit non trouvé' });
+
+    const { nom, prix, desc, image, emoji, actif } = req.body;
+    if (nom !== undefined) cat[idx].nom = String(nom).substring(0, 100);
+    if (prix !== undefined) {
+      const prixNum = parseInt(prix);
+      if (!isNaN(prixNum) && prixNum >= 0) cat[idx].prix = prixNum;
+    }
+    if (desc !== undefined) cat[idx].desc = String(desc).substring(0, 200);
+    if (image !== undefined) cat[idx].image = image || null;
+    if (emoji !== undefined) cat[idx].emoji = emoji || '🛍️';
+    if (actif !== undefined) cat[idx].actif = !!actif;
+
+    await saveCatalogue(req.params.botId, cat);
+    console.log(`✏️ Produit modifié dans ${req.params.botId}: ${cat[idx].nom}`);
+    res.json({ success: true, produit: cat[idx] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /catalogue/:botId/:produitIndex — Supprimer un produit
+app.delete('/catalogue/:botId/:produitIndex', async (req, res) => {
+  try {
+    const idx = parseInt(req.params.produitIndex);
+    if (isNaN(idx) || idx < 0) return res.status(400).json({ error: 'Index invalide' });
+
+    const cat = await getCatalogue(req.params.botId);
+    if (cat === null) return res.status(404).json({ error: 'Bot non trouvé' });
+    if (idx >= cat.length) return res.status(404).json({ error: 'Produit non trouvé' });
+
+    const removed = cat.splice(idx, 1);
+    await saveCatalogue(req.params.botId, cat);
+    console.log(`🗑️ Produit supprimé de ${req.params.botId}: ${removed[0]?.nom}`);
+    res.json({ success: true, removed: removed[0], total: cat.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================
 // BROADCASTS — Messages en masse
 // ============================================
 
@@ -2209,6 +2315,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
   <div class="tab-btns">
     <button class="tab-btn active" onclick="showTab('cmd',this)">📦 ${t(lang,'tab_orders')} (${commandes?.length||0})</button>
     <button class="tab-btn" onclick="showTab('rdv',this)">📅 ${t(lang,'tab_rdv')}</button>
+    <button class="tab-btn" onclick="showTab('catalogue',this)">🛍️ Catalogue (${(bot.catalogue||[]).length})</button>
     <button class="tab-btn" onclick="showTab('msgs',this)">💬 ${t(lang,'tab_messages')} (${msgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('audio',this)">🎤 ${t(lang,'tab_audio')} (${audioMsgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('avis',this)">⭐ ${t(lang,'tab_reviews')} (${allAvis?.length||0})</button>
@@ -2338,6 +2445,44 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
           </div>
         </div>
       `).join('') : `<div class="empty">Aucune commande encore. Partagez votre lien de chat !</div>`}
+    </div>
+  </div>
+
+  <!-- CATALOGUE -->
+  <div id="tab-catalogue" class="tab">
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>🛍️ Mon catalogue de produits</span>
+        <button class="btn btn-p" style="font-size:12px;padding:7px 14px" onclick="catOpenAdd()">+ Ajouter un produit</button>
+      </div>
+      <p style="font-size:13px;color:#5a7060;margin-bottom:14px">Gérez les produits/services que votre bot peut proposer aux clients.</p>
+
+      <div id="cat-add-form" style="display:none;background:#f0f4f1;border-radius:10px;padding:16px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">Nouveau produit</div>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="cat-new-nom" placeholder="Nom du produit *" style="padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+          <input id="cat-new-prix" type="number" min="0" placeholder="Prix FCFA *" style="padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <input id="cat-new-desc" placeholder="Description (optionnelle)" style="width:100%;padding:9px 12px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit;margin-bottom:8px"/>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <img id="cat-new-img-preview" src="" style="width:50px;height:50px;border-radius:8px;object-fit:cover;display:none;border:1px solid #d1e5d8"/>
+          <label style="padding:7px 12px;background:#fff;border:1.5px dashed #d1e5d8;border-radius:8px;font-size:12px;color:#5a7060;cursor:pointer">
+            📷 Photo (optionnelle)
+            <input type="file" accept="image/*" style="display:none" onchange="catUploadNewImg(this)"/>
+          </label>
+          <input id="cat-new-emoji" placeholder="🛍️" maxlength="2" style="width:50px;padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:18px;text-align:center;font-family:inherit"/>
+        </div>
+        <input type="hidden" id="cat-new-img-url"/>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-p" onclick="catAddSubmit()">💾 Ajouter</button>
+          <button class="btn btn-g" onclick="catCloseAdd()">Annuler</button>
+        </div>
+        <div id="cat-add-result" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px"></div>
+      </div>
+
+      <div id="cat-list">
+        <div style="text-align:center;color:#9ab0a0;font-size:13px;padding:20px">Chargement...</div>
+      </div>
     </div>
   </div>
 
@@ -2700,8 +2845,142 @@ async function updateStatut(id,s){
   await fetch('/commande/'+id+'/statut',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({statut:s})});
   setTimeout(function(){location.reload();},500);
 }
+
+// ============================================
+// CATALOGUE — Gestion des produits
+// ============================================
+function catEscape(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+async function catLoad(){
+  try{
+    var r=await fetch('/catalogue/'+BID);
+    var d=await r.json();
+    var el=document.getElementById('cat-list');
+    if(!el)return;
+    var items=d.catalogue||[];
+    if(!items.length){
+      el.innerHTML='<div style="text-align:center;color:#9ab0a0;font-size:14px;padding:30px;background:#f9faf9;border-radius:10px">Aucun produit. Cliquez sur "+ Ajouter un produit" pour commencer.</div>';
+      return;
+    }
+    var html='';
+    for(var i=0;i<items.length;i++){
+      var p=items[i];
+      var img=p.image
+        ?'<img src="'+catEscape(p.image)+'" style="width:60px;height:60px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid #e5e7eb"/>'
+        :'<div style="width:60px;height:60px;border-radius:8px;background:linear-gradient(135deg,#f0f4f1,#d1e5d8);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0">'+(p.emoji||'🛍️')+'</div>';
+      html+='<div data-idx="'+i+'" style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px;display:flex;gap:12px;align-items:center">'
+        +img
+        +'<div style="flex:1;min-width:0">'
+        +'<div style="font-size:14px;font-weight:700;color:#0a1a0f;margin-bottom:3px">'+catEscape(p.nom)+'</div>'
+        +(p.desc?'<div style="font-size:12px;color:#9ab0a0;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+catEscape(p.desc)+'</div>':'')
+        +'<div style="font-size:14px;font-weight:800;color:#00c875">'+(p.prix||0).toLocaleString('fr-FR')+' FCFA</div>'
+        +'</div>'
+        +'<div style="display:flex;flex-direction:column;gap:4px">'
+        +'<button onclick="catEdit('+i+')" style="background:#f0f4f1;border:1px solid #d1e5d8;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;color:#0a1a0f">✏️ Modifier</button>'
+        +'<button onclick="catDelete('+i+')" style="background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;color:#dc2626">🗑️ Supprimer</button>'
+        +'</div></div>';
+    }
+    el.innerHTML=html;
+  }catch(e){
+    var el2=document.getElementById('cat-list');
+    if(el2)el2.innerHTML='<div style="color:#ef4444;font-size:13px;padding:20px;text-align:center">Erreur de chargement: '+e.message+'</div>';
+  }
+}
+
+function catOpenAdd(){
+  document.getElementById('cat-add-form').style.display='block';
+  document.getElementById('cat-new-nom').value='';
+  document.getElementById('cat-new-prix').value='';
+  document.getElementById('cat-new-desc').value='';
+  document.getElementById('cat-new-emoji').value='';
+  document.getElementById('cat-new-img-url').value='';
+  document.getElementById('cat-new-img-preview').style.display='none';
+  document.getElementById('cat-add-result').style.display='none';
+  setTimeout(function(){document.getElementById('cat-new-nom').focus();},100);
+}
+function catCloseAdd(){
+  document.getElementById('cat-add-form').style.display='none';
+}
+
+async function catUploadNewImg(input){
+  var file=input.files[0];if(!file)return;
+  var preview=document.getElementById('cat-new-img-preview');
+  var reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      var r=await fetch('/upload/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base64:e.target.result,fileName:file.name,mimeType:file.type,folder:'catalogue'})});
+      var d=await r.json();
+      if(d.url){
+        preview.src=d.url;preview.style.display='block';
+        document.getElementById('cat-new-img-url').value=d.url;
+      }else{alert('Erreur upload image');}
+    }catch(err){alert('Erreur upload: '+err.message);}
+  };
+  reader.readAsDataURL(file);
+}
+
+async function catAddSubmit(){
+  var nom=document.getElementById('cat-new-nom').value.trim();
+  var prix=document.getElementById('cat-new-prix').value;
+  var desc=document.getElementById('cat-new-desc').value.trim();
+  var emoji=document.getElementById('cat-new-emoji').value.trim()||'🛍️';
+  var image=document.getElementById('cat-new-img-url').value||null;
+  var res=document.getElementById('cat-add-result');
+  if(!nom||!prix){
+    res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+    res.textContent='Remplissez le nom et le prix';
+    return;
+  }
+  try{
+    var r=await fetch('/catalogue/'+BID,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom:nom,prix:prix,desc:desc,image:image,emoji:emoji})});
+    var d=await r.json();
+    if(d.success){
+      res.style.display='block';res.style.background='#dcfce7';res.style.color='#166534';
+      res.textContent='✅ Produit ajouté! Total: '+d.total;
+      catLoad();
+      setTimeout(function(){catCloseAdd();},800);
+    }else{
+      res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+      res.textContent='Erreur: '+(d.error||'inconnu');
+    }
+  }catch(e){
+    res.style.display='block';res.style.background='#fee2e2';res.style.color='#dc2626';
+    res.textContent='Erreur réseau';
+  }
+}
+
+async function catEdit(idx){
+  try{
+    var r=await fetch('/catalogue/'+BID);
+    var d=await r.json();
+    var p=(d.catalogue||[])[idx];
+    if(!p){alert('Produit introuvable');return;}
+    var nouveauNom=prompt('Nom du produit:',p.nom);
+    if(nouveauNom===null)return;
+    var nouveauPrix=prompt('Prix (FCFA):',p.prix);
+    if(nouveauPrix===null)return;
+    var nouveauDesc=prompt('Description (optionnelle):',p.desc||'');
+    if(nouveauDesc===null)return;
+    var resp=await fetch('/catalogue/'+BID+'/'+idx,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom:nouveauNom,prix:nouveauPrix,desc:nouveauDesc})});
+    var data=await resp.json();
+    if(data.success){catLoad();}
+    else{alert('Erreur: '+(data.error||'inconnu'));}
+  }catch(e){alert('Erreur: '+e.message);}
+}
+
+async function catDelete(idx){
+  if(!confirm('Supprimer ce produit du catalogue?'))return;
+  try{
+    var r=await fetch('/catalogue/'+BID+'/'+idx,{method:'DELETE'});
+    var d=await r.json();
+    if(d.success){catLoad();}
+    else{alert('Erreur: '+(d.error||'inconnu'));}
+  }catch(e){alert('Erreur réseau');}
+}
+
 loadWorkflows();
 loadBroadcastCount();
+catLoad();
 </script>
 </body></html>`);
   } catch(e) { res.status(500).send('Erreur: '+e.message); }
