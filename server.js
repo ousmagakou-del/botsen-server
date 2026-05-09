@@ -3386,6 +3386,8 @@ app.get('/bot/:id', async (req, res) => {
     const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true`);
     if (!bots?.length) return res.status(404).json({ error:'Bot non trouvé' });
     const b = bots[0];
+    // CORS ouvert pour permettre l'intégration depuis n'importe quel site client
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({
       nom:b.nom, emoji:b.emoji, couleur:b.couleur, niche:b.niche,
       logo:b.logo_url||null, adresse:b.adresse, telephone:b.telephone,
@@ -3403,6 +3405,521 @@ app.get('/bot/:id', async (req, res) => {
       voiceEnabled: true
     });
   } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// 🌐 API PUBLIQUE — Pour intégration sur sites/apps externes
+// CORS ouvert pour permettre les appels depuis n'importe quel domaine
+// ============================================
+
+// Middleware CORS pour les routes publiques /api/v1
+app.use('/api/v1', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
+// 📋 API: Infos complètes d'un bot (publique)
+app.get('/api/v1/bots/:id', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true`);
+    if (!bots?.length) return res.status(404).json({ error:'Bot non trouvé' });
+    const b = bots[0];
+    res.json({
+      id: b.id, nom: b.nom, emoji: b.emoji, couleur: b.couleur, niche: b.niche,
+      logo: b.logo_url, adresse: b.adresse, telephone: b.telephone,
+      horaires: b.horaires, services: b.services,
+      paiement: { wave: b.wave_number, om: b.om_number, accepted: b.paiement },
+      livraison: b.livraison_actif ? {
+        actif: true, frais: b.livraison_frais||0, delai: b.livraison_delai||'30-45 min',
+        zones: b.livraison_zones||'Dakar', min: b.livraison_min||0
+      } : { actif: false },
+      catalogue_count: (b.catalogue||[]).length,
+      avg_rating: b.avg_rating || null,
+      chat_url: `${CONFIG.BASE_URL}/chat/${b.id}`,
+      widget_url: `${CONFIG.BASE_URL}/widget.js`
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 🛍️ API: Récupérer le catalogue d'un bot (pour affichage sur site client)
+app.get('/api/v1/bots/:id/catalogue', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true&select=catalogue,nom,couleur,livraison_actif,livraison_frais,wave_number,om_number`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+    const b = bots[0];
+    const catalogue = (b.catalogue || []).map((p, idx) => ({
+      id: idx,
+      nom: p.nom,
+      prix: p.prix,
+      desc: p.desc || null,
+      photo: p.photo || null,
+      emoji: p.emoji || '🛍️',
+      categorie: p.categorie || null,
+      stock: p.stock || null
+    }));
+    res.json({
+      bot: { nom: b.nom, couleur: b.couleur },
+      catalogue,
+      count: catalogue.length,
+      livraison_frais: b.livraison_actif ? (b.livraison_frais||0) : null,
+      paiement: { wave: b.wave_number, om: b.om_number }
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 🛒 API: Créer une commande directement depuis un site externe
+// Nécessite l'API key du bot (générée par patron) pour éviter abus
+app.post('/api/v1/bots/:id/commandes', async (req, res) => {
+  try {
+    const { items, total, client_nom, client_tel, client_email, adresse_livraison, methode_paiement, source } = req.body;
+    if (!items || !Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items requis (array)' });
+    if (!total || total <= 0) return res.status(400).json({ error: 'total requis' });
+
+    const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+    const bot = bots[0];
+
+    const cmdData = {
+      bot_id: bot.id,
+      session_id: `api_${Date.now()}_${Math.random().toString(36).substr(2,6)}`,
+      items, total: parseInt(total),
+      statut: 'pending',
+      methode_paiement: methode_paiement || 'en attente',
+      client_nom: client_nom || null,
+      client_tel: client_tel || null,
+      client_email: client_email || null,
+      adresse_livraison: adresse_livraison || null,
+      source: source || 'api_external'
+    };
+    Object.keys(cmdData).forEach(k => cmdData[k] == null && delete cmdData[k]);
+
+    const cmd = await db.insert('commandes', cmdData);
+    if (!cmd?.[0]) return res.status(500).json({ error: 'Échec création' });
+    const commande = cmd[0];
+
+    // Notifications: patron + client (comme via le chat)
+    notifyPatron(bot.id, commande).catch(()=>{});
+    if (commande.client_email) sendConfirmationClient(bot.id, commande, commande.client_email).catch(()=>{});
+    if (commande.client_tel) sendWhatsAppClientConfirmation(bot.id, commande).catch(()=>{});
+
+    res.json({
+      success: true,
+      commande: {
+        id: commande.id,
+        numero: commande.numero,
+        total: commande.total,
+        statut: commande.statut
+      }
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 💬 API: Envoyer un message au bot (pour intégration custom)
+app.post('/api/v1/bots/:id/chat', async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message) return res.status(400).json({ error: 'message requis' });
+    // Réutilise la même logique que /chat
+    const fakeReq = { body: { message, botId: req.params.id, sessionId: sessionId || `api_${Date.now()}` } };
+    // On simule un appel interne en passant par fetch
+    const r = await fetch(`http://localhost:${CONFIG.PORT}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fakeReq.body)
+    });
+    const d = await r.json();
+    res.json({
+      reply: d.reply,
+      session_id: fakeReq.body.sessionId,
+      actions: d.actions || [],
+      catalogue: d.catalogue || null
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ⭐ API: Récupérer les avis publics d'un bot
+app.get('/api/v1/bots/:id/avis', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const all = await db.select('avis', `?bot_id=eq.${req.params.id}&visible=eq.true&order=created_at.desc&limit=${limit}`);
+    if (!all || !Array.isArray(all)) return res.json({ avis: [], moyenne: 0, total: 0 });
+    const moyenne = all.length ? (all.reduce((s,a)=>s+a.note,0)/all.length).toFixed(2) : 0;
+    res.json({
+      avis: all.map(a => ({
+        note: a.note,
+        commentaire: a.commentaire || null,
+        reponse: a.reponse || null,
+        date: a.created_at
+      })),
+      moyenne: parseFloat(moyenne),
+      total: all.length
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 🎁 API: Valider un code promo (à utiliser depuis un site/app externe)
+app.post('/api/v1/bots/:id/promo/validate', async (req, res) => {
+  try {
+    const { code, total, client_tel } = req.body;
+    if (!code) return res.status(400).json({ error: 'code requis' });
+    const codeUpper = String(code).toUpperCase().trim();
+    const promos = await db.select('promos', `?bot_id=eq.${req.params.id}&code=eq.${encodeURIComponent(codeUpper)}&actif=eq.true&limit=1`);
+    if (!promos?.[0]) return res.json({ valid: false, error: 'Code invalide' });
+    const p = promos[0];
+    if (p.expire_at && new Date(p.expire_at) < new Date()) return res.json({ valid: false, error: 'Code expiré' });
+    if (p.max_uses && p.used_count >= p.max_uses) return res.json({ valid: false, error: 'Code épuisé' });
+    if (p.type === 'unique' && p.client_tel && client_tel) {
+      const norm = (s) => (s||'').replace(/[\s+\-()]/g,'');
+      if (norm(p.client_tel) !== norm(client_tel)) return res.json({ valid: false, error: 'Code réservé' });
+    }
+    const subtotal = parseInt(total) || 0;
+    let reduction = 0;
+    if (p.reduction_type === 'pct') reduction = Math.floor(subtotal * p.reduction_value / 100);
+    else if (p.reduction_type === 'fcfa') reduction = parseInt(p.reduction_value);
+    if (reduction > subtotal) reduction = subtotal;
+    res.json({
+      valid: true, code: p.code, reduction,
+      reduction_type: p.reduction_type, reduction_value: p.reduction_value,
+      original_total: subtotal, new_total: subtotal - reduction
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 📊 API: Statistiques publiques (info générale, sans données sensibles)
+app.get('/api/v1/bots/:id/stats', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.id}&actif=eq.true&select=avg_rating,messages_count`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+    const avis = await db.select('avis', `?bot_id=eq.${req.params.id}&visible=eq.true&select=note`);
+    res.json({
+      avg_rating: bots[0].avg_rating || null,
+      total_reviews: avis?.length || 0,
+      total_messages: bots[0].messages_count || 0
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// 📚 Page de documentation API publique
+app.get('/api/docs', (req, res) => {
+  const base = CONFIG.BASE_URL;
+  res.send(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>API SamaBot — Documentation</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#f5f7f6;color:#0a1a0f;line-height:1.6}
+.hd{background:linear-gradient(135deg,#00c875,#0a1a0f);color:#fff;padding:40px 20px;text-align:center}
+.hd h1{font-size:32px;font-weight:800;margin-bottom:8px}
+.hd p{font-size:14px;opacity:.9}
+.wrap{max-width:900px;margin:0 auto;padding:30px 20px}
+.toc{background:#fff;border-radius:12px;padding:20px;margin-bottom:24px;border:1px solid #e5e7eb}
+.toc h3{font-size:14px;color:#3a5040;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+.toc a{display:block;padding:6px 0;color:#0a1a0f;text-decoration:none;font-size:13px;border-bottom:1px solid #f0f4f1}
+.toc a:hover{color:#00c875}
+.toc a:last-child{border:none}
+.section{background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid #e5e7eb}
+.section h2{font-size:20px;font-weight:800;margin-bottom:16px;color:#0a1a0f}
+.section h3{font-size:14px;color:#3a5040;text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px}
+.section p{font-size:14px;color:#3a5040;margin-bottom:12px}
+.endpoint{display:flex;align-items:center;gap:10px;background:#0a1a0f;color:#fff;padding:12px 16px;border-radius:8px;font-family:monospace;font-size:13px;margin-bottom:10px;flex-wrap:wrap}
+.method{background:#00c875;color:#000;font-weight:800;padding:3px 10px;border-radius:4px;font-size:11px}
+.method.post{background:#f59e0b}
+.method.put,.method.patch{background:#3b82f6}
+.method.delete{background:#ef4444}
+.code{background:#0a1a0f;color:#a0e0c0;padding:14px;border-radius:8px;font-family:monospace;font-size:12px;overflow-x:auto;white-space:pre;line-height:1.5;margin:8px 0}
+.note{background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 14px;border-radius:4px;font-size:13px;margin:10px 0}
+.tag{display:inline-block;background:#dcfce7;color:#166534;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:6px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+th{text-align:left;padding:8px;background:#f0f4f1;color:#3a5040;font-size:11px;text-transform:uppercase}
+td{padding:8px;border-top:1px solid #f0f4f1;color:#0a1a0f}
+td code{background:#f0f4f1;padding:2px 6px;border-radius:3px;font-family:monospace;font-size:12px}
+</style></head><body>
+
+<div class="hd">
+  <h1>🤖 API SamaBot v1</h1>
+  <p>Intégrez SamaBot dans votre site, app ou plateforme</p>
+</div>
+
+<div class="wrap">
+
+<div class="toc">
+  <h3>📑 Sommaire</h3>
+  <a href="#integration">🚀 Intégration rapide (3 méthodes)</a>
+  <a href="#widget">💬 Widget JavaScript</a>
+  <a href="#api">🔌 API REST</a>
+  <a href="#sdk">📦 SDK JavaScript</a>
+  <a href="#examples">💡 Exemples concrets</a>
+  <a href="#cors">🔒 Sécurité & CORS</a>
+</div>
+
+<div class="section" id="integration">
+  <h2>🚀 Intégration rapide</h2>
+
+  <h3>1. Lien direct (le plus simple)</h3>
+  <p>Partagez votre lien de chat partout (WhatsApp, Instagram, email...) :</p>
+  <div class="code">${base}/chat/VOTRE_BOT_ID</div>
+
+  <h3>2. Widget flottant (bulle de chat sur votre site)</h3>
+  <p>Collez ce code juste avant <code>&lt;/body&gt;</code> sur n'importe quel site :</p>
+  <div class="code">&lt;script&gt;
+  window.SamaBotConfig = { botId: 'VOTRE_BOT_ID', couleur: '#00c875' };
+&lt;/script&gt;
+&lt;script src="${base}/widget.js" async&gt;&lt;/script&gt;</div>
+  <div class="note">✅ Compatible avec WordPress, Shopify, Wix, React, Vue, HTML pur, etc.</div>
+
+  <h3>3. iframe (intégration page complète)</h3>
+  <div class="code">&lt;iframe src="${base}/chat/VOTRE_BOT_ID" width="100%" height="600" style="border:none;border-radius:12px"&gt;&lt;/iframe&gt;</div>
+</div>
+
+<div class="section" id="api">
+  <h2>🔌 API REST publique</h2>
+  <p>Base URL: <code>${base}/api/v1</code></p>
+  <div class="note">🔓 Tous les endpoints publics ont CORS ouvert (<code>Access-Control-Allow-Origin: *</code>) pour intégration depuis n'importe quel domaine.</div>
+
+  <h3>📋 Récupérer les infos d'un bot</h3>
+  <div class="endpoint"><span class="method">GET</span> /api/v1/bots/:id</div>
+  <div class="code">curl ${base}/api/v1/bots/sargal-mov2odnz</div>
+  <p>Retourne : nom, logo, couleur, adresse, téléphone, horaires, livraison, paiement, etc.</p>
+
+  <h3>🛍️ Récupérer le catalogue (produits/services)</h3>
+  <div class="endpoint"><span class="method">GET</span> /api/v1/bots/:id/catalogue</div>
+  <div class="code">curl ${base}/api/v1/bots/VOTRE_BOT_ID/catalogue</div>
+  <p>Retourne tous les produits avec photos, prix, descriptions, emojis. <span class="tag">Idéal pour afficher sur votre site</span></p>
+  <div class="code">{
+  "bot": { "nom": "Sargal", "couleur": "#00c875" },
+  "catalogue": [
+    {
+      "id": 0,
+      "nom": "Pizza Margherita",
+      "prix": 5000,
+      "desc": "Sauce tomate, mozzarella, basilic",
+      "photo": "https://...",
+      "emoji": "🍕"
+    }
+  ],
+  "count": 1,
+  "livraison_frais": 1000,
+  "paiement": { "wave": "+221...", "om": "+221..." }
+}</div>
+
+  <h3>🛒 Créer une commande depuis votre site</h3>
+  <div class="endpoint"><span class="method post">POST</span> /api/v1/bots/:id/commandes</div>
+  <div class="code">curl -X POST ${base}/api/v1/bots/VOTRE_BOT_ID/commandes \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "items": [{"nom":"Pizza","prix":5000,"qte":1}],
+    "total": 6000,
+    "client_nom": "Aminata",
+    "client_tel": "+221771234567",
+    "adresse_livraison": "Almadies"
+  }'</div>
+  <p>✅ Crée la commande + envoie email/WhatsApp au patron + confirmation au client</p>
+
+  <h3>💬 Envoyer un message au bot IA</h3>
+  <div class="endpoint"><span class="method post">POST</span> /api/v1/bots/:id/chat</div>
+  <div class="code">curl -X POST ${base}/api/v1/bots/VOTRE_BOT_ID/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{"message":"Bonjour, vos horaires?","sessionId":"client123"}'</div>
+
+  <h3>⭐ Récupérer les avis</h3>
+  <div class="endpoint"><span class="method">GET</span> /api/v1/bots/:id/avis?limit=20</div>
+  <p><span class="tag">Idéal pour social proof sur votre site</span></p>
+
+  <h3>🎁 Valider un code promo</h3>
+  <div class="endpoint"><span class="method post">POST</span> /api/v1/bots/:id/promo/validate</div>
+  <div class="code">curl -X POST ${base}/api/v1/bots/VOTRE_BOT_ID/promo/validate \\
+  -H "Content-Type: application/json" \\
+  -d '{"code":"BIENVENUE10","total":6000}'</div>
+
+  <h3>📊 Statistiques publiques</h3>
+  <div class="endpoint"><span class="method">GET</span> /api/v1/bots/:id/stats</div>
+  <p>Note moyenne, nombre d'avis, nombre de messages traités</p>
+</div>
+
+<div class="section" id="sdk">
+  <h2>📦 SDK JavaScript (le plus rapide)</h2>
+  <p>Inclus le SDK puis utilisez l'API simplifiée :</p>
+  <div class="code">&lt;script src="${base}/sdk.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  const sb = SamaBot('VOTRE_BOT_ID');
+
+  // Récupérer le catalogue
+  const cat = await sb.getCatalogue();
+  console.log(cat.catalogue);
+
+  // Envoyer un message au bot IA
+  const r = await sb.sendMessage('Vos horaires?');
+  console.log(r.reply);
+
+  // Créer une commande
+  const cmd = await sb.createOrder({
+    items: [{nom:'Pizza',prix:5000}],
+    total: 6000,
+    client_nom: 'Aminata',
+    client_tel: '+221771234567'
+  });
+
+  // Valider un code promo
+  const promo = await sb.validatePromo('BIENVENUE10', 6000);
+  if (promo.valid) console.log('-' + promo.reduction + ' FCFA');
+&lt;/script&gt;</div>
+</div>
+
+<div class="section" id="examples">
+  <h2>💡 Exemples concrets</h2>
+
+  <h3>Exemple 1 : Afficher votre catalogue sur votre site WordPress</h3>
+  <div class="code">&lt;div id="mon-catalogue"&gt;Chargement...&lt;/div&gt;
+&lt;script src="${base}/sdk.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+const sb = SamaBot('VOTRE_BOT_ID');
+sb.getCatalogue().then(d =&gt; {
+  const html = d.catalogue.map(p =&gt;
+    \`&lt;div class="produit"&gt;
+       &lt;h3&gt;\${p.emoji} \${p.nom}&lt;/h3&gt;
+       &lt;p&gt;\${p.desc||''}&lt;/p&gt;
+       &lt;strong&gt;\${p.prix.toLocaleString('fr-FR')} FCFA&lt;/strong&gt;
+       &lt;a href="${base}/chat/VOTRE_BOT_ID?produit=\${p.id}"&gt;Commander&lt;/a&gt;
+     &lt;/div&gt;\`
+  ).join('');
+  document.getElementById('mon-catalogue').innerHTML = html;
+});
+&lt;/script&gt;</div>
+
+  <h3>Exemple 2 : Bouton "Avis" avec note moyenne</h3>
+  <div class="code">&lt;script src="${base}/sdk.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+SamaBot('VOTRE_BOT_ID').getStats().then(s =&gt; {
+  document.getElementById('rating').innerHTML =
+    '⭐ ' + s.avg_rating + ' (' + s.total_reviews + ' avis)';
+});
+&lt;/script&gt;</div>
+
+  <h3>Exemple 3 : App React</h3>
+  <div class="code">// catalogue.jsx
+import { useState, useEffect } from 'react';
+
+function Catalogue() {
+  const [produits, setProduits] = useState([]);
+  useEffect(() =&gt; {
+    fetch('${base}/api/v1/bots/VOTRE_BOT_ID/catalogue')
+      .then(r =&gt; r.json())
+      .then(d =&gt; setProduits(d.catalogue));
+  }, []);
+  return produits.map(p =&gt; &lt;div key={p.id}&gt;{p.nom}: {p.prix} F&lt;/div&gt;);
+}</div>
+</div>
+
+<div class="section" id="cors">
+  <h2>🔒 Sécurité & CORS</h2>
+
+  <h3>Endpoints publics (CORS *)</h3>
+  <p>Tous les endpoints <code>/api/v1/bots/:id/*</code> ont CORS ouvert et sont consultables depuis n'importe quel domaine sans authentification.</p>
+
+  <h3>Limitations</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Limite</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /catalogue</code></td><td>Illimité (mise en cache navigateur)</td></tr>
+      <tr><td><code>POST /chat</code></td><td>30 messages/min/IP (selon plan)</td></tr>
+      <tr><td><code>POST /commandes</code></td><td>10 commandes/min/IP</td></tr>
+      <tr><td><code>POST /promo/validate</code></td><td>60/min/IP</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Bonnes pratiques</h3>
+  <ul style="margin-left:20px">
+    <li>Cachez les réponses du catalogue (ça change rarement)</li>
+    <li>Validez les données côté client AVANT d'envoyer</li>
+    <li>Affichez la note moyenne en cache de manière responsive</li>
+  </ul>
+</div>
+
+<div style="text-align:center;color:#9ab0a0;font-size:13px;padding:30px 0">
+  Questions? <a href="mailto:gakououssou@gmail.com" style="color:#00c875">Contactez-nous</a>
+</div>
+
+</div>
+</body></html>`);
+});
+
+// 📦 SDK JavaScript SamaBot — pour intégration ultra simple
+app.get('/sdk.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const base = CONFIG.BASE_URL;
+  res.send(`(function(g){
+"use strict";
+var BASE = '${base}';
+function SamaBot(botId){
+  if(!(this instanceof SamaBot)) return new SamaBot(botId);
+  this.botId = botId;
+  this.base = BASE;
+}
+SamaBot.prototype._fetch = function(path, opts){
+  return fetch(this.base + '/api/v1/bots/' + this.botId + path, opts || {})
+    .then(function(r){ return r.json(); });
+};
+SamaBot.prototype.getInfo = function(){
+  return this._fetch('');
+};
+SamaBot.prototype.getCatalogue = function(){
+  return this._fetch('/catalogue');
+};
+SamaBot.prototype.getReviews = function(limit){
+  return this._fetch('/avis?limit=' + (limit || 20));
+};
+SamaBot.prototype.getStats = function(){
+  return this._fetch('/stats');
+};
+SamaBot.prototype.sendMessage = function(message, sessionId){
+  return this._fetch('/chat', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ message: message, sessionId: sessionId })
+  });
+};
+SamaBot.prototype.createOrder = function(data){
+  return this._fetch('/commandes', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(data)
+  });
+};
+SamaBot.prototype.validatePromo = function(code, total, clientTel){
+  return this._fetch('/promo/validate', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ code: code, total: total, client_tel: clientTel })
+  });
+};
+SamaBot.prototype.openChat = function(){
+  // Ouvre le chat dans un nouvel onglet
+  window.open(this.base + '/chat/' + this.botId, '_blank');
+};
+SamaBot.prototype.embedChat = function(selector){
+  // Intègre le chat en iframe dans un élément
+  var el = typeof selector === 'string' ? document.querySelector(selector) : selector;
+  if(!el) return console.error('SamaBot: élément introuvable');
+  var iframe = document.createElement('iframe');
+  iframe.src = this.base + '/chat/' + this.botId;
+  iframe.style.cssText = 'width:100%;min-height:540px;border:none;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.08)';
+  el.appendChild(iframe);
+};
+SamaBot.prototype.injectWidget = function(){
+  // Injecte le widget bulle flottante
+  if(g.SamaBotConfig) return;
+  g.SamaBotConfig = { botId: this.botId };
+  var s = document.createElement('script');
+  s.src = this.base + '/widget.js';
+  s.async = true;
+  document.body.appendChild(s);
+};
+g.SamaBot = SamaBot;
+})(typeof window !== 'undefined' ? window : this);`);
 });
 
 // ============================================
