@@ -297,9 +297,127 @@ async function transcribeAudio(audioBuffer, fileName, mimeType) {
 // ============================================
 // SESSIONS & OPENAI
 // ============================================
+// Cache mémoire (rapide) + persistance Supabase (survit aux redémarrages)
 const sessions = {};
+const sessionsDirty = new Set(); // sids modifiés à sauvegarder
+const sessionsLoaded = new Set(); // sids déjà chargés depuis la DB
+
 function getHist(sid) { if(!sessions[sid]) sessions[sid]=[]; return sessions[sid]; }
-function addHist(sid, role, content) { const h=getHist(sid); h.push({role,content}); if(h.length>14) h.shift(); }
+function addHist(sid, role, content) {
+  const h=getHist(sid);
+  h.push({role,content});
+  if(h.length>14) h.shift();
+  sessionsDirty.add(sid);
+}
+
+// Charger une session depuis la DB si pas en mémoire (lazy loading)
+async function loadSessionFromDb(sid) {
+  if (sessionsLoaded.has(sid)) return; // déjà tenté
+  sessionsLoaded.add(sid);
+  if (sessions[sid] && sessions[sid].length) return; // déjà en mémoire
+  try {
+    const rows = await db.select('chat_sessions', `?session_id=eq.${encodeURIComponent(sid)}&limit=1`);
+    if (rows && rows[0] && Array.isArray(rows[0].messages)) {
+      sessions[sid] = rows[0].messages.slice(-14); // garde max 14 messages
+      console.log(`💾 Session ${sid.substring(0,15)}... rechargée (${sessions[sid].length} msgs)`);
+    }
+  } catch(e) { /* table peut ne pas exister, ce n'est pas grave */ }
+}
+
+// Sauvegarder en DB toutes les sessions modifiées (toutes les 30s)
+async function flushDirtySessions() {
+  if (!sessionsDirty.size) return;
+  const sids = Array.from(sessionsDirty);
+  sessionsDirty.clear();
+  for (const sid of sids) {
+    try {
+      const msgs = sessions[sid] || [];
+      if (!msgs.length) continue;
+      // upsert: insert ou update si existe déjà
+      const existing = await db.select('chat_sessions', `?session_id=eq.${encodeURIComponent(sid)}&select=id&limit=1`);
+      if (existing?.[0]?.id) {
+        await db.update('chat_sessions', { messages: msgs, updated_at: new Date().toISOString() }, `?id=eq.${existing[0].id}`);
+      } else {
+        await db.insert('chat_sessions', { session_id: sid, messages: msgs, updated_at: new Date().toISOString() });
+      }
+    } catch(e) { /* table peut ne pas exister, on continue silencieusement */ }
+  }
+}
+
+// Crée la table chat_sessions si elle n'existe pas (au démarrage, via Supabase REST best-effort)
+async function ensureSessionsTable() {
+  try {
+    // Test simple pour voir si la table existe
+    await db.select('chat_sessions', '?limit=1');
+    console.log('💾 Table chat_sessions: ✅ (sessions persistées)');
+  } catch(e) {
+    console.log('');
+    console.log('⚠️  ====================================================');
+    console.log('💾 TABLE chat_sessions INTROUVABLE');
+    console.log('⚠️  Les sessions ne survivront PAS aux redémarrages.');
+    console.log('⚠️  Exécutez ce SQL dans Supabase (SQL Editor):');
+    console.log('====================================================');
+    console.log(`CREATE TABLE IF NOT EXISTS chat_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE,
+  messages JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_sid ON chat_sessions(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_upd ON chat_sessions(updated_at);
+
+CREATE TABLE IF NOT EXISTS promos (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  code TEXT NOT NULL,
+  type TEXT DEFAULT 'text',
+  reduction_type TEXT DEFAULT 'pct',
+  reduction_value INT NOT NULL,
+  max_uses INT,
+  used_count INT DEFAULT 0,
+  client_tel TEXT,
+  actif BOOLEAN DEFAULT TRUE,
+  description TEXT,
+  expire_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  used_at TIMESTAMPTZ,
+  UNIQUE(bot_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_promos_bot ON promos(bot_id);
+CREATE INDEX IF NOT EXISTS idx_promos_code ON promos(bot_id, code);
+
+ALTER TABLE avis ADD COLUMN IF NOT EXISTS visible BOOLEAN DEFAULT TRUE;
+ALTER TABLE avis ADD COLUMN IF NOT EXISTS reponse TEXT;
+ALTER TABLE avis ADD COLUMN IF NOT EXISTS reponse_date TIMESTAMPTZ;`);
+    console.log('====================================================');
+    console.log('💡 Une fois exécuté, redémarrez le service Render.');
+    console.log('');
+  }
+}
+
+// Démarrer le flush périodique (toutes les 30s)
+setInterval(flushDirtySessions, 30000);
+// Et au démarrage du serveur
+setTimeout(ensureSessionsTable, 3000);
+
+// Cleanup mémoire: supprime les sessions inactives depuis >2h pour éviter fuite mémoire
+setInterval(() => {
+  const now = Date.now();
+  const beforeCount = Object.keys(sessions).length;
+  for (const sid in sessions) {
+    // Garde un timestamp d'accès via une closure (simple): supprime si pas modifié récemment
+    // (en réalité on ne sait pas, donc on garde tout en mémoire ; les sessions seront rechargées au besoin depuis la DB)
+  }
+  // En pratique, on fait simple: si plus de 1000 sessions en mémoire, on garde les 500 plus récemment modifiées
+  const sids = Object.keys(sessions);
+  if (sids.length > 1000) {
+    // On supprime simplement les premiers (ordre d'insertion)
+    const toRemove = sids.slice(0, sids.length - 500);
+    toRemove.forEach(sid => delete sessions[sid]);
+    console.log(`🧹 Cleanup mémoire: ${toRemove.length} sessions retirées (${Object.keys(sessions).length} restent)`);
+  }
+}, 600000); // toutes les 10 min
 
 function detectLang(text) {
   if (!text) return 'inconnu';
@@ -470,6 +588,8 @@ app.post('/chat', async (req, res) => {
 
     const bot = bots[0];
     const sid = sessionId || `${botId}_${Date.now()}`;
+    // Lazy-load la session depuis la DB si pas déjà en mémoire (survie aux redémarrages)
+    await loadSessionFromDb(sid);
     const intents = detectIntent(message, bot);
 
     // Vérifie les workflows avant l'IA
@@ -536,6 +656,32 @@ app.post('/chat', async (req, res) => {
     //   - Le client dit "oui/ok/confirme" après un récap du bot
     const shouldCreateOrder = botConfirmingOrder || (isClientConfirming && lastBotHadRecap);
 
+    // 🎁 Détection d'un code promo dans le message client
+    // Patterns: "code BIENVENUE10", "BIENVENUE10", "j'ai un code: PROMO20", etc.
+    let promoApplied = null;
+    const codeMatch = message.match(/\b(?:code\s*(?:promo)?[:\s]*)?([A-Z0-9]{4,15}(?:-[A-Z0-9]{4,15})?)\b/i);
+    if (codeMatch && /[A-Z]/i.test(codeMatch[1])) {
+      const candidate = codeMatch[1].toUpperCase();
+      // Filtrer les faux positifs (pas un code promo): mots communs, numéros tels...
+      if (!/^(BONJOUR|MERCI|ASALAA|MAALEKUM|WAAW|JEREJEF|OUI|NON|CONFIRME|COMMANDER|PIZZA|BURGER|CAFE|PROMO|CODE)$/i.test(candidate) && candidate.length >= 5) {
+        try {
+          const promoCheck = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(candidate)}&actif=eq.true&limit=1`);
+          if (promoCheck?.[0]) {
+            const p = promoCheck[0];
+            // Vérifs basiques
+            const expired = p.expire_at && new Date(p.expire_at) < new Date();
+            const exhausted = p.max_uses && p.used_count >= p.max_uses;
+            if (!expired && !exhausted) {
+              promoApplied = p;
+              console.log(`🎁 Code promo détecté: ${candidate} pour bot ${botId}`);
+            } else {
+              console.log(`⚠️ Code ${candidate} ${expired?'expiré':'épuisé'}`);
+            }
+          }
+        } catch(e) { /* table peut ne pas exister, on continue */ }
+      }
+    }
+
     if (shouldCreateOrder) {
       const trigger = botConfirmingOrder ? 'bot a confirmé' : 'client a confirmé';
       console.log(`✅ Création commande déclenchée (${trigger}) pour bot ${botId}`);
@@ -552,8 +698,29 @@ app.post('/chat', async (req, res) => {
       }
       const finalTotal = totalFromRecap || orderTotal || 0;
 
+      // Récupérer le promo de toute la conversation (pas juste le message courant)
+      // car le client peut avoir donné le code plusieurs messages avant
+      let promoToApply = promoApplied;
+      if (!promoToApply) {
+        const allUserMsgs = getHist(sid).filter(h=>h.role==='user').map(m=>m.content).join(' ');
+        const allCodeMatch = allUserMsgs.match(/\b([A-Z0-9]{4,15}(?:-[A-Z0-9]{4,15})?)\b/g);
+        if (allCodeMatch) {
+          for (const c of allCodeMatch) {
+            const cu = c.toUpperCase();
+            if (/^(BONJOUR|MERCI|ASALAA|MAALEKUM|WAAW|JEREJEF|OUI|NON|CONFIRME|COMMANDER|PIZZA|BURGER|CAFE|PROMO|CODE)$/i.test(cu)) continue;
+            try {
+              const check = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(cu)}&actif=eq.true&limit=1`);
+              if (check?.[0] && (!check[0].expire_at || new Date(check[0].expire_at) > new Date()) && (!check[0].max_uses || check[0].used_count < check[0].max_uses)) {
+                promoToApply = check[0];
+                break;
+              }
+            } catch(e) {}
+          }
+        }
+      }
+
       // Crée la commande + envoie TOUTES les notifs (patron + client) en UNE fois
-      createOrderFromConfirmation(botId, sid, finalTotal, bot, sourceText).catch(e=>console.error('createOrder err:', e.message));
+      createOrderFromConfirmation(botId, sid, finalTotal, bot, sourceText, promoToApply).catch(e=>console.error('createOrder err:', e.message));
     }
 
     // Si commande sans total encore → GPS pour adresse
@@ -601,6 +768,7 @@ app.post('/chat/voice', async (req, res) => {
 
     // Sauvegarde audio
     const sid = sessionId || `${botId}_voice_${Date.now()}`;
+    await loadSessionFromDb(sid);
     db.insert('audio_messages', { bot_id:botId, session_id:sid, transcription, langue_detectee:detectLang(transcription) }).catch(()=>{});
 
     // Réponse IA — prompt frais avec fallback gracieux
@@ -863,6 +1031,372 @@ app.get('/analytics/:botId/export/messages.csv', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="messages-${botId}-${new Date().toISOString().split('T')[0]}.csv"`);
     res.send(csv);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================
+// CODES PROMO — Texte (BIENVENUE10) + Uniques (par client)
+// Table 'promos' attendue:
+//   id (uuid), bot_id, code (unique par bot), type ('text'/'unique'),
+//   reduction_type ('pct'/'fcfa'), reduction_value (number),
+//   max_uses (int, null=illimité), used_count (int default 0),
+//   client_tel (text, null pour 'text', valeur pour 'unique'),
+//   actif (bool default true), expire_at (timestamp), description (text),
+//   created_at, used_at
+// ============================================
+
+// Génère un code unique aléatoire (8 chars alphanumériques upper)
+function generatePromoCode(prefix) {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sans 0/O/1/I/L pour lisibilité
+  let s = (prefix||'') + '-';
+  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s.toUpperCase();
+}
+
+// Liste les codes promo d'un bot
+app.get('/promos/:botId', async (req, res) => {
+  try {
+    const promos = await db.select('promos', `?bot_id=eq.${req.params.botId}&order=created_at.desc`);
+    res.json(promos || []);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Crée un code promo texte (réutilisable, ex: BIENVENUE10)
+app.post('/promos/:botId/text', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { code, reduction_type, reduction_value, max_uses, expire_at, description } = req.body;
+    if (!code || !reduction_type || !reduction_value) {
+      return res.status(400).json({ error: 'code, reduction_type, reduction_value requis' });
+    }
+    if (!['pct','fcfa'].includes(reduction_type)) {
+      return res.status(400).json({ error: 'reduction_type doit être pct ou fcfa' });
+    }
+    const codeUpper = String(code).toUpperCase().trim();
+    // Vérifier que ce code n'existe pas déjà
+    const existing = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(codeUpper)}&limit=1`);
+    if (existing?.length) return res.status(400).json({ error: 'Ce code existe déjà' });
+
+    const data = {
+      bot_id: botId,
+      code: codeUpper,
+      type: 'text',
+      reduction_type,
+      reduction_value: parseInt(reduction_value),
+      max_uses: max_uses ? parseInt(max_uses) : null,
+      used_count: 0,
+      actif: true,
+      description: description || null,
+      expire_at: expire_at || null
+    };
+    const out = await db.insert('promos', data);
+    res.json({ success: true, promo: out?.[0] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Crée un code promo unique pour un client donné
+app.post('/promos/:botId/unique', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { client_tel, reduction_type, reduction_value, expire_at, description } = req.body;
+    if (!client_tel || !reduction_type || !reduction_value) {
+      return res.status(400).json({ error: 'client_tel, reduction_type, reduction_value requis' });
+    }
+    // Charger le bot pour le préfixe
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom`);
+    const prefix = (bots?.[0]?.nom || 'PROMO').substring(0, 4).toUpperCase().replace(/[^A-Z]/g, '');
+    let code, attempts = 0;
+    while (attempts < 5) {
+      code = generatePromoCode(prefix);
+      const existing = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(code)}&limit=1`);
+      if (!existing?.length) break;
+      attempts++;
+    }
+    const data = {
+      bot_id: botId,
+      code,
+      type: 'unique',
+      reduction_type,
+      reduction_value: parseInt(reduction_value),
+      max_uses: 1,
+      used_count: 0,
+      client_tel,
+      actif: true,
+      description: description || null,
+      expire_at: expire_at || null
+    };
+    const out = await db.insert('promos', data);
+    // Envoyer le code au client par WhatsApp si tel valide
+    if (client_tel && CONFIG.WASENDER_API_KEY) {
+      const botNom = bots?.[0]?.nom || 'Notre service';
+      const reduc = reduction_type === 'pct' ? `${reduction_value}%` : `${parseInt(reduction_value).toLocaleString('fr-FR')} FCFA`;
+      const msg = `🎁 *${botNom}* — Code promo personnel\n\nVotre code: *${code}*\nRéduction: *${reduc}*\n${expire_at?`⏰ Valide jusqu'au ${new Date(expire_at).toLocaleDateString('fr-FR')}\n`:''}${description?`\n${description}\n`:''}\nUtilisez-le lors de votre prochaine commande! Jërëjëf 🙏`;
+      sendWhatsApp(client_tel, msg).catch(()=>{});
+    }
+    res.json({ success: true, promo: out?.[0] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Désactive/supprime un code promo
+app.delete('/promos/:botId/:promoId', async (req, res) => {
+  try {
+    await db.update('promos', { actif: false }, `?id=eq.${req.params.promoId}&bot_id=eq.${req.params.botId}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Valide un code promo (utilisé par le bot ou côté client lors de la commande)
+app.post('/promos/:botId/validate', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const { code, total, client_tel } = req.body;
+    if (!code) return res.status(400).json({ error: 'code requis' });
+    const codeUpper = String(code).toUpperCase().trim();
+    const promos = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(codeUpper)}&actif=eq.true&limit=1`);
+    if (!promos?.[0]) return res.json({ valid: false, error: 'Code invalide' });
+    const p = promos[0];
+    // Vérifications
+    if (p.expire_at && new Date(p.expire_at) < new Date()) return res.json({ valid: false, error: 'Code expiré' });
+    if (p.max_uses && p.used_count >= p.max_uses) return res.json({ valid: false, error: 'Code déjà utilisé' });
+    if (p.type === 'unique' && p.client_tel && client_tel) {
+      // Normalise pour comparaison
+      const norm = (s) => (s||'').replace(/[\s+\-()]/g,'');
+      if (norm(p.client_tel) !== norm(client_tel)) {
+        return res.json({ valid: false, error: 'Code réservé à un autre client' });
+      }
+    }
+    // Calculer la réduction
+    const subtotal = parseInt(total) || 0;
+    let reduction = 0;
+    if (p.reduction_type === 'pct') reduction = Math.floor(subtotal * p.reduction_value / 100);
+    else if (p.reduction_type === 'fcfa') reduction = parseInt(p.reduction_value);
+    if (reduction > subtotal) reduction = subtotal;
+    const newTotal = subtotal - reduction;
+    res.json({
+      valid: true,
+      code: p.code,
+      reduction,
+      reduction_type: p.reduction_type,
+      reduction_value: p.reduction_value,
+      original_total: subtotal,
+      new_total: newTotal,
+      description: p.description
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Marque un code promo comme utilisé (incrémente used_count)
+async function applyPromoCode(botId, code) {
+  try {
+    const codeUpper = String(code).toUpperCase().trim();
+    const promos = await db.select('promos', `?bot_id=eq.${botId}&code=eq.${encodeURIComponent(codeUpper)}&limit=1`);
+    if (!promos?.[0]) return false;
+    await db.update('promos', {
+      used_count: (promos[0].used_count || 0) + 1,
+      used_at: new Date().toISOString()
+    }, `?id=eq.${promos[0].id}`);
+    return true;
+  } catch(e) { console.error('applyPromoCode:', e.message); return false; }
+}
+
+// ============================================
+// EMAILS RÉCAPS PATRON — Hebdo (lundi) + Mensuel (1er du mois)
+// ============================================
+
+// Construit les statistiques d'un bot pour une période donnée
+async function buildBotRecap(botId, sinceDate, untilDate) {
+  try {
+    const since = sinceDate.toISOString();
+    const until = untilDate.toISOString();
+    const [commandes, msgs, avis, rdvs, prevCommandes] = await Promise.all([
+      db.select('commandes', `?bot_id=eq.${botId}&created_at=gte.${since}&created_at=lt.${until}`),
+      db.select('messages', `?bot_id=eq.${botId}&role=eq.user&created_at=gte.${since}&created_at=lt.${until}&limit=10000`),
+      db.select('avis', `?bot_id=eq.${botId}&created_at=gte.${since}&created_at=lt.${until}&visible=eq.true`),
+      db.select('rendez_vous', `?bot_id=eq.${botId}&created_at=gte.${since}&created_at=lt.${until}`),
+      // Période précédente (même durée) pour comparaison
+      (function(){
+        const dur = untilDate.getTime() - sinceDate.getTime();
+        const prevSince = new Date(sinceDate.getTime() - dur).toISOString();
+        return db.select('commandes', `?bot_id=eq.${botId}&created_at=gte.${prevSince}&created_at=lt.${since}`);
+      })()
+    ]);
+    const validC = (commandes||[]).filter(c => c.statut==='paid'||c.statut==='delivered');
+    const totalRevenue = validC.reduce((s,c)=>s+(c.total||0),0);
+    const validPrevC = (prevCommandes||[]).filter(c => c.statut==='paid'||c.statut==='delivered');
+    const prevRevenue = validPrevC.reduce((s,c)=>s+(c.total||0),0);
+    const growth = prevRevenue > 0 ? ((totalRevenue - prevRevenue) / prevRevenue * 100) : (totalRevenue > 0 ? 100 : 0);
+    const avgRating = (avis||[]).length ? (avis.reduce((s,a)=>s+a.note,0)/avis.length).toFixed(1) : null;
+    return {
+      orders: (commandes||[]).length,
+      orders_paid: validC.length,
+      revenue: totalRevenue,
+      messages: (msgs||[]).length,
+      reviews: (avis||[]).length,
+      avg_rating: avgRating,
+      appointments: (rdvs||[]).length,
+      growth_pct: parseFloat(growth.toFixed(1)),
+      prev_revenue: prevRevenue,
+    };
+  } catch(e) { console.error('buildBotRecap:', e.message); return null; }
+}
+
+// Envoie un email récap à un patron
+async function sendRecapEmail(bot, recap, periodLabel, periodIcon) {
+  if (!bot.notifications_email || !recap) return false;
+  const growth = recap.growth_pct;
+  const growthColor = growth >= 0 ? '#10b981' : '#ef4444';
+  const growthIcon = growth >= 0 ? '📈' : '📉';
+  const growthSign = growth >= 0 ? '+' : '';
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="margin:0;background:#f5f7f6;font-family:-apple-system,sans-serif">
+  <div style="max-width:600px;margin:0 auto;background:#fff">
+    <div style="background:linear-gradient(135deg,${bot.couleur||'#00c875'},#0a1a0f);padding:30px 24px;color:#fff;text-align:center">
+      <div style="font-size:40px;margin-bottom:10px">${periodIcon}</div>
+      <div style="font-size:22px;font-weight:800">${periodLabel}</div>
+      <div style="font-size:14px;opacity:.9;margin-top:4px">${bot.nom}</div>
+    </div>
+    <div style="padding:28px 24px">
+      <p style="font-size:14px;color:#3a5040;margin:0 0 20px">Voici votre récap d'activité ${periodLabel.toLowerCase()}.</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:#166534;text-transform:uppercase;letter-spacing:.5px">Commandes payées</div>
+          <div style="font-size:28px;font-weight:800;color:#0a1a0f;margin-top:4px">${recap.orders_paid}</div>
+          <div style="font-size:11px;color:#5a7060;margin-top:2px">Total: ${recap.orders}</div>
+        </div>
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.5px">Revenus</div>
+          <div style="font-size:28px;font-weight:800;color:#0a1a0f;margin-top:4px">${(recap.revenue||0).toLocaleString('fr-FR')} F</div>
+          <div style="font-size:11px;color:${growthColor};margin-top:2px;font-weight:700">${growthIcon} ${growthSign}${growth}% vs période préc.</div>
+        </div>
+        <div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:10px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:.5px">Messages</div>
+          <div style="font-size:28px;font-weight:800;color:#0a1a0f;margin-top:4px">${recap.messages}</div>
+        </div>
+        <div style="background:#fce7f3;border:1px solid #f9a8d4;border-radius:10px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:#9d174d;text-transform:uppercase;letter-spacing:.5px">RDV</div>
+          <div style="font-size:28px;font-weight:800;color:#0a1a0f;margin-top:4px">${recap.appointments}</div>
+        </div>
+      </div>
+
+      ${recap.reviews>0 ? `
+      <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:10px;padding:14px;margin-bottom:20px;text-align:center">
+        <div style="font-size:11px;color:#854d0e;text-transform:uppercase">⭐ Note moyenne</div>
+        <div style="font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">${recap.avg_rating}/5</div>
+        <div style="font-size:11px;color:#5a7060">${recap.reviews} nouveaux avis</div>
+      </div>` : ''}
+
+      <a href="${CONFIG.BASE_URL}/dashboard/${bot.id}" style="display:block;background:#00c875;color:#000;text-align:center;padding:14px;border-radius:10px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:10px">📊 Voir le dashboard complet →</a>
+
+      ${recap.orders === 0 ? `<p style="font-size:13px;color:#5a7060;background:#f9faf9;padding:14px;border-radius:8px;margin-top:10px">💡 Pas de commandes ${periodLabel.toLowerCase()}? Pensez à partager votre lien sur les réseaux sociaux ou créer un code promo!</p>` : ''}
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">
+      SamaBot IA — samabot.app · Vous recevez cet email car vous gérez ${bot.nom}
+    </div>
+  </div></body></html>`;
+  await sendEmail(bot.notifications_email, `${periodIcon} ${periodLabel} — ${bot.nom}`, html);
+  return true;
+}
+
+// Envoie les récaps à tous les bots actifs
+async function sendAllRecaps(periodType) {
+  try {
+    const bots = await db.select('bots', '?actif=eq.true&select=id,nom,couleur,notifications_email');
+    if (!bots?.length) return;
+    const now = new Date();
+    let sinceDate, untilDate, label, icon;
+    if (periodType === 'week') {
+      // Semaine précédente: lundi 00:00 → dimanche 23:59
+      const dayOfWeek = now.getDay() || 7; // dim=0 → 7
+      sinceDate = new Date(now);
+      sinceDate.setDate(now.getDate() - dayOfWeek - 6);
+      sinceDate.setHours(0, 0, 0, 0);
+      untilDate = new Date(sinceDate.getTime() + 7*86400000);
+      label = 'Récap de la semaine';
+      icon = '📅';
+    } else { // month
+      // Mois précédent: 1er du mois précédent → 1er du mois en cours
+      sinceDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      untilDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthNames = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+      label = `Récap de ${monthNames[sinceDate.getMonth()]}`;
+      icon = '🗓️';
+    }
+    console.log(`📧 Envoi récaps ${periodType} à ${bots.length} bots (${sinceDate.toISOString().substring(0,10)} → ${untilDate.toISOString().substring(0,10)})`);
+    let sent = 0;
+    for (const bot of bots) {
+      if (!bot.notifications_email) continue;
+      try {
+        const recap = await buildBotRecap(bot.id, sinceDate, untilDate);
+        if (recap) {
+          await sendRecapEmail(bot, recap, label, icon);
+          sent++;
+        }
+      } catch(e) { console.error(`recap ${bot.nom}:`, e.message); }
+    }
+    console.log(`✅ ${sent} récaps envoyés`);
+  } catch(e) { console.error('sendAllRecaps:', e.message); }
+}
+
+// Scheduler: vérifie toutes les heures si on doit envoyer un récap
+// Hebdo: lundi à 9h00
+// Mensuel: 1er du mois à 9h30
+let lastWeeklyRun = null, lastMonthlyRun = null;
+function checkAndSendRecaps() {
+  const now = new Date();
+  const day = now.getDay(); // 0=dimanche, 1=lundi
+  const date = now.getDate();
+  const hour = now.getHours();
+  const todayKey = now.toISOString().substring(0, 10);
+
+  // Hebdo: lundi (day=1) à 9h
+  if (day === 1 && hour === 9 && lastWeeklyRun !== todayKey) {
+    lastWeeklyRun = todayKey;
+    sendAllRecaps('week').catch(e => console.error('Weekly recap err:', e.message));
+  }
+  // Mensuel: 1er du mois à 9h30 (vérifié à 9h pour correspondre au cycle horaire)
+  if (date === 1 && hour === 9 && lastMonthlyRun !== todayKey) {
+    lastMonthlyRun = todayKey;
+    // Délai pour ne pas envoyer en même temps que l'hebdo
+    setTimeout(() => sendAllRecaps('month').catch(e => console.error('Monthly recap err:', e.message)), 30*60*1000);
+  }
+}
+// Vérifier toutes les heures
+setInterval(checkAndSendRecaps, 60 * 60 * 1000);
+// Et au démarrage (utile si serveur redémarre à 9h05 par ex.)
+setTimeout(checkAndSendRecaps, 5000);
+
+// Endpoint pour déclencher manuellement le récap (admin)
+app.post('/admin/recap/:type', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== ADMIN_SECRET && req.query.secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Non autorisé' });
+  }
+  const type = req.params.type;
+  if (!['week','month'].includes(type)) return res.status(400).json({ error: 'type doit être week ou month' });
+  sendAllRecaps(type).catch(e => console.error('Manual recap err:', e.message));
+  res.json({ success: true, message: `Récap ${type} déclenché` });
+});
+
+// Endpoint pour tester un récap sur un bot précis
+app.get('/recap/:botId/preview', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}`);
+    if (!bots?.[0]) return res.status(404).json({ error: 'bot introuvable' });
+    const bot = bots[0];
+    const period = req.query.period || 'week';
+    const now = new Date();
+    let sinceDate, untilDate;
+    if (period === 'week') {
+      const dayOfWeek = now.getDay() || 7;
+      sinceDate = new Date(now);
+      sinceDate.setDate(now.getDate() - dayOfWeek - 6);
+      sinceDate.setHours(0, 0, 0, 0);
+      untilDate = new Date(sinceDate.getTime() + 7*86400000);
+    } else {
+      sinceDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      untilDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    const recap = await buildBotRecap(bot.id, sinceDate, untilDate);
+    res.json({ bot: { id: bot.id, nom: bot.nom }, period, since: sinceDate.toISOString(), until: untilDate.toISOString(), recap });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2285,7 +2819,7 @@ async function notifyNouveauMessage(botId, message) {
 // Extrait les infos client depuis le récap du bot, crée la commande complète,
 // et envoie TOUTES les notifs (patron + client, email + WhatsApp) en UN SEUL appel
 // ============================================
-async function createOrderFromConfirmation(botId, sessionId, total, bot, recapText) {
+async function createOrderFromConfirmation(botId, sessionId, total, bot, recapText, promo) {
   try {
     // Vérifie si une commande a déjà été créée récemment pour cette session (anti-doublon)
     const existing = await db.select('commandes', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&order=created_at.desc&limit=1`);
@@ -2309,14 +2843,35 @@ async function createOrderFromConfirmation(botId, sessionId, total, bot, recapTe
       article: infos.article || null,
     };
 
-    console.log(`📦 Création commande pour bot ${botId}:`, JSON.stringify(finalInfos));
+    // 🎁 Appliquer le code promo si fourni
+    let originalTotal = total || 0;
+    let promoReduction = 0;
+    let promoCode = null;
+    if (promo && originalTotal > 0) {
+      // Vérifie que le client_tel correspond pour les promos uniques
+      const okClient = promo.type !== 'unique' || !promo.client_tel ||
+        (finalInfos.client_tel && (promo.client_tel.replace(/[\s+\-()]/g,'') === finalInfos.client_tel.replace(/[\s+\-()]/g,'')));
+      if (okClient) {
+        if (promo.reduction_type === 'pct') {
+          promoReduction = Math.floor(originalTotal * promo.reduction_value / 100);
+        } else if (promo.reduction_type === 'fcfa') {
+          promoReduction = parseInt(promo.reduction_value) || 0;
+        }
+        if (promoReduction > originalTotal) promoReduction = originalTotal;
+        promoCode = promo.code;
+        console.log(`🎁 Code promo ${promo.code} appliqué: -${promoReduction} FCFA`);
+      }
+    }
+    const finalTotal = originalTotal - promoReduction;
+
+    console.log(`📦 Création commande pour bot ${botId}:`, JSON.stringify(finalInfos), promoCode?`(promo: ${promoCode})`:'');
 
     // Créer la commande
     const cmdData = {
       bot_id: botId,
       session_id: sessionId,
       items: finalInfos.article ? [{ nom: finalInfos.article }] : [],
-      total: total || 0,
+      total: finalTotal,
       statut: 'pending',
       methode_paiement: 'en attente',
       client_nom: finalInfos.client_nom,
@@ -2324,6 +2879,10 @@ async function createOrderFromConfirmation(botId, sessionId, total, bot, recapTe
       client_email: finalInfos.client_email,
       adresse_livraison: finalInfos.adresse_livraison,
     };
+    // Stocker le code promo et la réduction dans items si table le supporte
+    if (promoCode) {
+      cmdData.items = [...cmdData.items, { promo_code: promoCode, reduction: promoReduction, original_total: originalTotal }];
+    }
     // Retire les null pour ne pas écraser les valeurs par défaut DB
     Object.keys(cmdData).forEach(k => cmdData[k] == null && delete cmdData[k]);
 
@@ -2333,7 +2892,12 @@ async function createOrderFromConfirmation(botId, sessionId, total, bot, recapTe
       return;
     }
     const commande = cmd[0];
-    console.log(`✅ Commande créée: ${commande.numero} — ${total} FCFA`);
+    console.log(`✅ Commande créée: ${commande.numero} — ${finalTotal} FCFA${promoCode?` (promo ${promoCode}: -${promoReduction})`:''}`);
+
+    // Marquer le promo comme utilisé
+    if (promoCode) {
+      applyPromoCode(botId, promoCode).catch(()=>{});
+    }
 
     // 📧📱 NOTIFICATIONS PATRON (1 email + 1 WhatsApp seulement)
     notifyPatron(botId, commande).catch(e => console.error('notifyPatron:', e.message));
@@ -2894,6 +3458,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <button class="tab-btn active" onclick="showTab('cmd',this)">📦 ${t(lang,'tab_orders')} (${commandes?.length||0})</button>
     <button class="tab-btn" onclick="showTab('rdv',this)">📅 ${t(lang,'tab_rdv')}</button>
     <button class="tab-btn" onclick="showTab('catalogue',this)">🛍️ Catalogue (${(bot.catalogue||[]).length})</button>
+    <button class="tab-btn" onclick="showTab('promos',this)">🎁 Promos</button>
     <button class="tab-btn" onclick="showTab('analytics',this)">📊 Analytics</button>
     <button class="tab-btn" onclick="showTab('msgs',this)">💬 ${t(lang,'tab_messages')} (${msgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('audio',this)">🎤 ${t(lang,'tab_audio')} (${audioMsgs?.length||0})</button>
@@ -3082,6 +3647,59 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
 
       <div id="ana-content">
         <div style="text-align:center;color:#9ab0a0;padding:30px">Chargement des analytics...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROMOS -->
+  <div id="tab-promos" class="tab">
+    <div class="card">
+      <div class="card-title">🎁 Codes promo</div>
+
+      <!-- Création code TEXTE -->
+      <div style="background:#f0f4f1;border-radius:10px;padding:14px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">📢 Code public (texte)</div>
+        <p style="font-size:12px;color:#5a7060;margin-bottom:10px">Code utilisable par tous (ex: <strong>BIENVENUE10</strong> = -10%)</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="pt-code" placeholder="Code (ex: BIENVENUE10)" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit;text-transform:uppercase"/>
+          <input id="pt-desc" placeholder="Description (optionnel)" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <select id="pt-type" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit">
+            <option value="pct">% (pourcentage)</option>
+            <option value="fcfa">FCFA (montant fixe)</option>
+          </select>
+          <input id="pt-value" type="number" placeholder="Valeur" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+          <input id="pt-max" type="number" placeholder="Max usages (vide=illimité)" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center">
+          <input id="pt-expire" type="date" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+          <button onclick="promoCreateText()" class="btn btn-g" style="font-size:12px;padding:9px 14px">Créer le code</button>
+        </div>
+      </div>
+
+      <!-- Création code UNIQUE -->
+      <div style="background:#fef3c7;border-radius:10px;padding:14px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">🎯 Code personnel (un client)</div>
+        <p style="font-size:12px;color:#5a7060;margin-bottom:10px">Code unique généré et envoyé par WhatsApp à un client spécifique</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="pu-tel" placeholder="Tel client (+221...)" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+          <input id="pu-desc" placeholder="Description (optionnel)" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <select id="pu-type" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit">
+            <option value="pct">% (pourcentage)</option>
+            <option value="fcfa">FCFA (montant fixe)</option>
+          </select>
+          <input id="pu-value" type="number" placeholder="Valeur" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+          <input id="pu-expire" type="date" style="padding:9px;border:1.5px solid #d1e5d8;border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <button onclick="promoCreateUnique()" class="btn btn-g" style="font-size:12px;padding:9px 14px">Générer & envoyer par WhatsApp</button>
+      </div>
+
+      <div style="font-size:13px;font-weight:700;color:#0a1a0f;margin:14px 0 10px">Codes existants</div>
+      <div id="promos-list">
+        <div style="text-align:center;color:#9ab0a0;padding:20px">Chargement...</div>
       </div>
     </div>
   </div>
@@ -3429,6 +4047,7 @@ function showTab(id,btn){
   if(id==='rdv') loadRdvSemaine();
   if(id==='analytics') loadAnalytics();
   if(id==='avis') avisLoad();
+  if(id==='promos') promosLoad();
 }
 function copyLink(){
   navigator.clipboard.writeText(location.origin+'/chat/'+BID).then(function(){alert('Lien copie!');});
@@ -3801,6 +4420,126 @@ async function avisToggle(id, makeVisible){
   try {
     await fetch('/avis/' + id + '/visibilite', {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({visible: makeVisible})});
     avisLoad();
+  } catch(e){ alert('Erreur réseau'); }
+}
+
+// ============================================
+// PROMOS — Gestion codes promo
+// ============================================
+async function promosLoad(){
+  var el = document.getElementById('promos-list');
+  if(!el) return;
+  try {
+    var r = await fetch('/promos/' + BID);
+    var list = await r.json();
+    if(!Array.isArray(list) || !list.length){
+      el.innerHTML = '<div style="text-align:center;color:#9ab0a0;padding:20px">Aucun code créé. Créez votre premier code ci-dessus!</div>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f0f4f1">';
+    html += '<th style="padding:8px;text-align:left;font-size:11px;color:#3a5040">Code</th>';
+    html += '<th style="padding:8px;text-align:left;font-size:11px;color:#3a5040">Type</th>';
+    html += '<th style="padding:8px;text-align:left;font-size:11px;color:#3a5040">Réduction</th>';
+    html += '<th style="padding:8px;text-align:center;font-size:11px;color:#3a5040">Utilisations</th>';
+    html += '<th style="padding:8px;text-align:left;font-size:11px;color:#3a5040">Statut</th>';
+    html += '<th style="padding:8px;text-align:right;font-size:11px;color:#3a5040">Action</th>';
+    html += '</tr></thead><tbody>';
+    list.forEach(function(p){
+      var reduc = p.reduction_type === 'pct' ? p.reduction_value + '%' : (p.reduction_value||0).toLocaleString('fr-FR') + ' FCFA';
+      var typeLabel = p.type === 'unique' ? '🎯 Personnel' : '📢 Public';
+      var typeColor = p.type === 'unique' ? '#92400e' : '#166534';
+      var typeBg = p.type === 'unique' ? '#fef3c7' : '#dcfce7';
+      var usage = p.max_uses ? (p.used_count||0) + ' / ' + p.max_uses : (p.used_count||0) + ' (illimité)';
+      var expired = p.expire_at && new Date(p.expire_at) < new Date();
+      var statut = !p.actif ? '🚫 Désactivé' : (expired ? '⏰ Expiré' : '✅ Actif');
+      var statutColor = !p.actif ? '#9ca3af' : (expired ? '#ef4444' : '#10b981');
+      var opacity = (!p.actif || expired) ? '0.5' : '1';
+      html += '<tr style="border-bottom:1px solid #e5e7eb;opacity:' + opacity + '">';
+      html += '<td style="padding:8px;font-family:monospace;font-weight:700;color:#0a1a0f">' + p.code + '</td>';
+      html += '<td style="padding:8px"><span style="background:' + typeBg + ';color:' + typeColor + ';padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">' + typeLabel + '</span>' + (p.client_tel?'<br><span style="font-size:10px;color:#9ab0a0">' + p.client_tel + '</span>':'') + '</td>';
+      html += '<td style="padding:8px;font-weight:700;color:#00c875">-' + reduc + '</td>';
+      html += '<td style="padding:8px;text-align:center;font-size:12px">' + usage + '</td>';
+      html += '<td style="padding:8px;font-size:11px;color:' + statutColor + ';font-weight:600">' + statut + '</td>';
+      html += '<td style="padding:8px;text-align:right">';
+      if(p.actif) html += '<button data-promo-disable="' + p.id + '" style="padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fff;color:#dc2626;font-size:10px;cursor:pointer;font-family:inherit">Désactiver</button>';
+      html += '</td>';
+      html += '</tr>';
+      if(p.description){
+        html += '<tr><td colspan="6" style="padding:0 8px 8px;font-size:11px;color:#5a7060;font-style:italic">↳ ' + p.description + '</td></tr>';
+      }
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    // Hook bouton désactiver
+    el.querySelectorAll('[data-promo-disable]').forEach(function(b){
+      b.addEventListener('click', async function(){
+        if(!confirm('Désactiver ce code promo?')) return;
+        try {
+          await fetch('/promos/' + BID + '/' + b.getAttribute('data-promo-disable'), {method:'DELETE'});
+          promosLoad();
+        } catch(e){ alert('Erreur réseau'); }
+      });
+    });
+  } catch(e){
+    el.innerHTML = '<div style="color:#ef4444;padding:20px">Erreur: ' + e.message + '</div>';
+  }
+}
+
+async function promoCreateText(){
+  var code = document.getElementById('pt-code').value.trim().toUpperCase();
+  var type = document.getElementById('pt-type').value;
+  var value = parseInt(document.getElementById('pt-value').value);
+  var max = document.getElementById('pt-max').value;
+  var expire = document.getElementById('pt-expire').value;
+  var desc = document.getElementById('pt-desc').value.trim();
+  if(!code || !value){ alert('Code et valeur de réduction requis'); return; }
+  if(value < 0 || (type==='pct' && value>100)){ alert('Valeur invalide'); return; }
+  try {
+    var r = await fetch('/promos/' + BID + '/text', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+      code, reduction_type: type, reduction_value: value,
+      max_uses: max ? parseInt(max) : null,
+      expire_at: expire || null,
+      description: desc || null
+    })});
+    var d = await r.json();
+    if(d.success){
+      document.getElementById('pt-code').value='';
+      document.getElementById('pt-value').value='';
+      document.getElementById('pt-max').value='';
+      document.getElementById('pt-expire').value='';
+      document.getElementById('pt-desc').value='';
+      promosLoad();
+      alert('✅ Code créé: ' + (d.promo?.code || code));
+    } else {
+      alert('Erreur: ' + (d.error || 'inconnu'));
+    }
+  } catch(e){ alert('Erreur réseau'); }
+}
+
+async function promoCreateUnique(){
+  var tel = document.getElementById('pu-tel').value.trim();
+  var type = document.getElementById('pu-type').value;
+  var value = parseInt(document.getElementById('pu-value').value);
+  var expire = document.getElementById('pu-expire').value;
+  var desc = document.getElementById('pu-desc').value.trim();
+  if(!tel || !value){ alert('Téléphone client et valeur requis'); return; }
+  if(value < 0 || (type==='pct' && value>100)){ alert('Valeur invalide'); return; }
+  try {
+    var r = await fetch('/promos/' + BID + '/unique', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+      client_tel: tel, reduction_type: type, reduction_value: value,
+      expire_at: expire || null, description: desc || null
+    })});
+    var d = await r.json();
+    if(d.success){
+      document.getElementById('pu-tel').value='';
+      document.getElementById('pu-value').value='';
+      document.getElementById('pu-expire').value='';
+      document.getElementById('pu-desc').value='';
+      promosLoad();
+      alert('✅ Code généré et envoyé par WhatsApp: ' + (d.promo?.code || ''));
+    } else {
+      alert('Erreur: ' + (d.error || 'inconnu'));
+    }
   } catch(e){ alert('Erreur réseau'); }
 }
 
