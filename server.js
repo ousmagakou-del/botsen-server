@@ -313,9 +313,13 @@ function detectLang(text) {
   return 'Autre';
 }
 
-async function callAI(prompt, sid, message, retries=2) {
-  addHist(sid, 'user', message);
+async function callAI(prompt, sid, message, retries=2, attempt=1) {
+  // N'ajoute le message à l'historique qu'au premier essai (évite duplication)
+  if (attempt === 1) addHist(sid, 'user', message);
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout
+
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${CONFIG.OPENAI_API_KEY}` },
@@ -323,17 +327,73 @@ async function callAI(prompt, sid, message, retries=2) {
         model: 'gpt-4o-mini',
         messages: [{ role:'system', content:prompt }, ...getHist(sid)],
         max_tokens: 400, temperature: 0.7
-      })
+      }),
+      signal: controller.signal
     });
+    clearTimeout(timeout);
+
+    // Distinction des erreurs HTTP
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      const status = res.status;
+
+      // 401/403 = problème de clé API → ne pas retry, log critique
+      if (status === 401 || status === 403) {
+        console.error(`🔑 OpenAI AUTH ERROR (${status}): vérifiez OPENAI_API_KEY`);
+        throw new Error(`OpenAI auth error ${status}`);
+      }
+      // 429 = rate limit → backoff plus long
+      if (status === 429) {
+        console.warn(`⏳ OpenAI rate limit (tentative ${attempt}/${retries+1})`);
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 2000 * attempt));
+          return callAI(prompt, sid, message, retries-1, attempt+1);
+        }
+      }
+      // 500/502/503 = OpenAI down → retry
+      if (status >= 500 && retries > 0) {
+        console.warn(`⚠️ OpenAI ${status} (tentative ${attempt}/${retries+1})`);
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+        return callAI(prompt, sid, message, retries-1, attempt+1);
+      }
+      throw new Error(`OpenAI error ${status}: ${errBody.substring(0,150)}`);
+    }
+
     const data = await res.json();
-    if (!data.choices?.[0]) throw new Error('No response');
+    if (!data.choices?.[0]?.message?.content) throw new Error('OpenAI: empty response');
     const reply = data.choices[0].message.content;
     addHist(sid, 'assistant', reply);
     return reply;
   } catch(err) {
-    if (retries > 0) { await new Promise(r=>setTimeout(r,1200)); return callAI(prompt,sid,message,retries-1); }
+    // Timeout ou erreur réseau → retry
+    if ((err.name === 'AbortError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT') && retries > 0) {
+      console.warn(`🔄 OpenAI timeout/reseau (tentative ${attempt}/${retries+1})`);
+      await new Promise(r => setTimeout(r, 1200 * attempt));
+      return callAI(prompt, sid, message, retries-1, attempt+1);
+    }
+    // Échec définitif: log + relance pour que le caller décide du fallback
+    console.error(`❌ callAI failed définitivement: ${err.message}`);
     throw err;
   }
+}
+
+// Réponse de secours quand l'IA est down (au lieu de planter le chat)
+function getFallbackReply(message, bot) {
+  const msg = (message||'').toLowerCase();
+  // Détection d'intention basique pour répondre minimalement
+  if (/bonjour|salut|salam|hello|hi\b/.test(msg)) {
+    return `Asalaa maalekum! 👋 Bienvenue chez ${bot.nom}.\n\nNotre assistant rencontre une petite difficulté technique. Vous pouvez ${bot.telephone?`nous contacter au ${bot.telephone}`:'réessayer dans quelques secondes'}. Jërëjëf 🙏`;
+  }
+  if (/horaire|heure|ouvert/.test(msg) && bot.horaires) {
+    return `🕐 Nos horaires: ${bot.horaires}\n\nPour plus d'infos, ${bot.telephone?`appelez le ${bot.telephone}`:'réessayez dans un moment'}.`;
+  }
+  if (/adresse|où|localisation/.test(msg) && bot.adresse) {
+    return `📍 Notre adresse: ${bot.adresse}\n\nPour plus d'infos, ${bot.telephone?`appelez le ${bot.telephone}`:'réessayez dans un moment'}.`;
+  }
+  if (/téléphone|contact|appel/.test(msg) && bot.telephone) {
+    return `📞 Appelez-nous au ${bot.telephone}`;
+  }
+  return `Désolé, notre assistant rencontre une difficulté temporaire 🙏\n\n${bot.telephone?`Vous pouvez nous appeler au ${bot.telephone}`:'Réessayez dans quelques instants.'} ${bot.adresse?`\n📍 ${bot.adresse}`:''}`;
 }
 
 // ============================================
@@ -421,9 +481,14 @@ app.post('/chat', async (req, res) => {
       console.log(`⚡ Réponse workflow pour bot ${botId}`);
     } else {
       // 🔄 Toujours utiliser le prompt fraîchement calculé (pas celui en DB)
-      // Comme ça les anciens bots bénéficient automatiquement du nouveau flux
       const freshPrompt = makePrompt(bot);
-      reply = await callAI(freshPrompt, sid, message);
+      try {
+        reply = await callAI(freshPrompt, sid, message);
+      } catch(aiErr) {
+        // OpenAI down → fallback gracieux pour ne pas casser l'expérience client
+        console.error(`⚠️ Fallback activé pour bot ${botId}:`, aiErr.message);
+        reply = getFallbackReply(message, bot);
+      }
     }
 
     // Détecte si le BOT demande l'adresse dans sa réponse
@@ -538,9 +603,15 @@ app.post('/chat/voice', async (req, res) => {
     const sid = sessionId || `${botId}_voice_${Date.now()}`;
     db.insert('audio_messages', { bot_id:botId, session_id:sid, transcription, langue_detectee:detectLang(transcription) }).catch(()=>{});
 
-    // Réponse IA — prompt frais
+    // Réponse IA — prompt frais avec fallback gracieux
     const intents = detectIntent(transcription, bot);
-    const reply = await callAI(makePrompt(bot), sid, transcription);
+    let reply;
+    try {
+      reply = await callAI(makePrompt(bot), sid, transcription);
+    } catch(aiErr) {
+      console.error(`⚠️ Voice fallback pour bot ${botId}:`, aiErr.message);
+      reply = getFallbackReply(transcription, bot);
+    }
 
     let orderTotal = 0;
     const totalMatch = reply.match(/total\s*[:\-]?\s*([0-9][0-9\s]*)\s*f?cfa/i);
@@ -627,6 +698,172 @@ app.patch('/commande/:id/statut', async (req, res) => {
 
     res.json({ success:true });
   } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ============================================
+// ANALYTICS — Graphiques + export CSV
+// ============================================
+
+// Stats temporelles d'un bot (commandes, revenus, msgs par jour)
+app.get('/analytics/:botId', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const days = parseInt(req.query.days) || 30; // 7, 30, 90 jours
+
+    const since = new Date(Date.now() - days*86400000).toISOString();
+
+    const [commandes, msgs, avis, rdvs] = await Promise.all([
+      db.select('commandes', `?bot_id=eq.${botId}&created_at=gte.${since}&order=created_at.asc`),
+      db.select('messages', `?bot_id=eq.${botId}&role=eq.user&created_at=gte.${since}&order=created_at.asc&limit=10000`),
+      db.select('avis', `?bot_id=eq.${botId}&created_at=gte.${since}&visible=eq.true&order=created_at.asc`),
+      db.select('rendez_vous', `?bot_id=eq.${botId}&created_at=gte.${since}&order=created_at.asc`)
+    ]);
+
+    // Agréger par jour
+    const buildDailyMap = (items) => {
+      const map = {};
+      for (let i = 0; i < days; i++) {
+        const d = new Date(Date.now() - (days-1-i)*86400000);
+        const key = d.toISOString().split('T')[0];
+        map[key] = 0;
+      }
+      (items||[]).forEach(it => {
+        const key = (it.created_at || '').split('T')[0];
+        if (key in map) map[key]++;
+      });
+      return Object.entries(map).map(([date, count]) => ({date, count}));
+    };
+
+    const buildRevenueMap = (cmds) => {
+      const map = {};
+      for (let i = 0; i < days; i++) {
+        const d = new Date(Date.now() - (days-1-i)*86400000);
+        const key = d.toISOString().split('T')[0];
+        map[key] = 0;
+      }
+      (cmds||[]).forEach(c => {
+        if (c.statut === 'paid' || c.statut === 'delivered') {
+          const key = (c.created_at || '').split('T')[0];
+          if (key in map) map[key] += (c.total||0);
+        }
+      });
+      return Object.entries(map).map(([date, total]) => ({date, total}));
+    };
+
+    // Calcul comparatif période vs précédente
+    const halfDays = Math.floor(days/2);
+    const halfwayMs = Date.now() - halfDays*86400000;
+    const recent = (commandes||[]).filter(c => new Date(c.created_at).getTime() > halfwayMs);
+    const previous = (commandes||[]).filter(c => new Date(c.created_at).getTime() <= halfwayMs);
+    const recentRev = recent.filter(c => c.statut==='paid'||c.statut==='delivered').reduce((s,c)=>s+(c.total||0),0);
+    const previousRev = previous.filter(c => c.statut==='paid'||c.statut==='delivered').reduce((s,c)=>s+(c.total||0),0);
+    const revGrowth = previousRev > 0 ? ((recentRev - previousRev) / previousRev * 100) : (recentRev > 0 ? 100 : 0);
+
+    // Distribution des statuts
+    const statusDist = {};
+    (commandes||[]).forEach(c => {
+      statusDist[c.statut] = (statusDist[c.statut]||0) + 1;
+    });
+
+    // Heures les plus actives (0-23)
+    const hourly = Array(24).fill(0);
+    (msgs||[]).forEach(m => {
+      const h = new Date(m.created_at).getHours();
+      hourly[h]++;
+    });
+
+    res.json({
+      period_days: days,
+      orders: {
+        total: (commandes||[]).length,
+        daily: buildDailyMap(commandes),
+        by_status: statusDist,
+      },
+      revenue: {
+        total: (commandes||[]).filter(c => c.statut==='paid'||c.statut==='delivered').reduce((s,c)=>s+(c.total||0),0),
+        daily: buildRevenueMap(commandes),
+        growth_pct: parseFloat(revGrowth.toFixed(1)),
+        recent_period: recentRev,
+        previous_period: previousRev,
+      },
+      messages: {
+        total: (msgs||[]).length,
+        daily: buildDailyMap(msgs),
+        hourly: hourly.map((count, hour) => ({hour, count})),
+      },
+      reviews: {
+        total: (avis||[]).length,
+        average: (avis||[]).length ? parseFloat(((avis||[]).reduce((s,a)=>s+a.note,0)/avis.length).toFixed(2)) : 0,
+      },
+      appointments: {
+        total: (rdvs||[]).length,
+        daily: buildDailyMap(rdvs),
+      }
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Export CSV des commandes
+app.get('/analytics/:botId/export/commandes.csv', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const days = parseInt(req.query.days) || 90;
+    const since = new Date(Date.now() - days*86400000).toISOString();
+    const commandes = await db.select('commandes', `?bot_id=eq.${botId}&created_at=gte.${since}&order=created_at.desc&limit=5000`);
+
+    const escape = (s) => {
+      if (s == null) return '';
+      const str = String(s).replace(/"/g, '""');
+      return /[",\n]/.test(str) ? `"${str}"` : str;
+    };
+
+    const headers = ['Numero','Date','Statut','Total_FCFA','Client_Nom','Client_Tel','Client_Email','Adresse_Livraison','Methode_Paiement','Articles'];
+    const rows = (commandes||[]).map(c => [
+      c.numero || c.id,
+      c.created_at ? c.created_at.replace('T',' ').substring(0,19) : '',
+      c.statut || '',
+      c.total || 0,
+      c.client_nom || '',
+      c.client_tel || '',
+      c.client_email || '',
+      c.adresse_livraison || '',
+      c.methode_paiement || '',
+      Array.isArray(c.items) ? c.items.map(i => i.nom||i).join(' | ') : ''
+    ].map(escape).join(','));
+
+    const csv = '\uFEFF' + headers.join(',') + '\n' + rows.join('\n'); // BOM pour Excel
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="commandes-${botId}-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csv);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Export CSV des conversations / messages
+app.get('/analytics/:botId/export/messages.csv', async (req, res) => {
+  try {
+    const { botId } = req.params;
+    const days = parseInt(req.query.days) || 30;
+    const since = new Date(Date.now() - days*86400000).toISOString();
+    const msgs = await db.select('messages', `?bot_id=eq.${botId}&created_at=gte.${since}&order=created_at.desc&limit=5000`);
+
+    const escape = (s) => {
+      if (s == null) return '';
+      const str = String(s).replace(/"/g, '""');
+      return /[",\n]/.test(str) ? `"${str}"` : str;
+    };
+    const headers = ['Date','Role','Session','Contenu'];
+    const rows = (msgs||[]).map(m => [
+      m.created_at ? m.created_at.replace('T',' ').substring(0,19) : '',
+      m.role || '',
+      m.conversation_id || '',
+      m.content || ''
+    ].map(escape).join(','));
+
+    const csv = '\uFEFF' + headers.join(',') + '\n' + rows.join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="messages-${botId}-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csv);
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================
@@ -1274,15 +1511,106 @@ async function runWorkflows(botId, message, sessionId) {
 app.post('/avis', async (req, res) => {
   try {
     const { botId, sessionId, note, commentaire } = req.body;
-    await db.insert('avis', { bot_id:botId, session_id:sessionId, note, commentaire:commentaire||null });
-    const allAvis = await db.select('avis', `?bot_id=eq.${botId}&select=note`);
+    await db.insert('avis', {
+      bot_id:botId, session_id:sessionId, note,
+      commentaire: commentaire||null,
+      visible: true,    // visible par défaut, le patron peut masquer
+      reponse: null     // réponse du patron (null = pas répondu)
+    });
+    // Recalcule la moyenne sur les avis visibles uniquement
+    const allAvis = await db.select('avis', `?bot_id=eq.${botId}&visible=eq.true&select=note`);
     if (allAvis?.length) {
       const avg = allAvis.reduce((s,a)=>s+a.note,0)/allAvis.length;
       await db.update('bots', { avg_rating:parseFloat(avg.toFixed(2)) }, `?id=eq.${botId}`);
     }
+    // Notifie le patron par email/WhatsApp si avis négatif (note <= 2)
+    if (note <= 2) {
+      notifyPatronAvisNegatif(botId, note, commentaire).catch(()=>{});
+    }
     res.json({ success:true });
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
+
+// Stats avis pour le dashboard
+app.get('/avis/stats/:botId', async (req, res) => {
+  try {
+    const all = await db.select('avis', `?bot_id=eq.${req.params.botId}&order=created_at.desc`);
+    if (!all || !Array.isArray(all)) return res.json({ total:0, distribution:{1:0,2:0,3:0,4:0,5:0}, moyenne:0 });
+    const visible = all.filter(a => a.visible !== false);
+    const distribution = {1:0, 2:0, 3:0, 4:0, 5:0};
+    visible.forEach(a => { if (a.note >= 1 && a.note <= 5) distribution[a.note]++; });
+    const moyenne = visible.length ? (visible.reduce((s,a)=>s+a.note,0)/visible.length) : 0;
+    const repondus = visible.filter(a => a.reponse).length;
+    const negatifs = visible.filter(a => a.note <= 2).length;
+    res.json({
+      total: visible.length,
+      total_brut: all.length,
+      caches: all.length - visible.length,
+      distribution,
+      moyenne: parseFloat(moyenne.toFixed(2)),
+      repondus,
+      negatifs,
+      a_repondre: visible.filter(a => a.note <= 3 && !a.reponse).length
+    });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Récupérer tous les avis (avec réponses)
+app.get('/avis/list/:botId', async (req, res) => {
+  try {
+    const all = await db.select('avis', `?bot_id=eq.${req.params.botId}&order=created_at.desc&limit=100`);
+    res.json(all || []);
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Patron: répondre à un avis
+app.patch('/avis/:id/repondre', async (req, res) => {
+  try {
+    const { reponse } = req.body;
+    if (!reponse || !reponse.trim()) return res.status(400).json({ error:'reponse requise' });
+    await db.update('avis', {
+      reponse: reponse.substring(0, 500),
+      reponse_date: new Date().toISOString()
+    }, `?id=eq.${req.params.id}`);
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Patron: masquer/afficher un avis
+app.patch('/avis/:id/visibilite', async (req, res) => {
+  try {
+    const { visible } = req.body;
+    await db.update('avis', { visible: !!visible }, `?id=eq.${req.params.id}`);
+    // Recalcule la moyenne
+    const avis = await db.select('avis', `?id=eq.${req.params.id}&select=bot_id`);
+    if (avis?.[0]?.bot_id) {
+      const visibles = await db.select('avis', `?bot_id=eq.${avis[0].bot_id}&visible=eq.true&select=note`);
+      if (visibles?.length) {
+        const avg = visibles.reduce((s,a)=>s+a.note,0)/visibles.length;
+        await db.update('bots', { avg_rating:parseFloat(avg.toFixed(2)) }, `?id=eq.${avis[0].bot_id}`);
+      }
+    }
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Notif patron pour avis négatif
+async function notifyPatronAvisNegatif(botId, note, commentaire) {
+  try {
+    const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone,notifications_email`);
+    const bot = bots?.[0];
+    if (!bot) return;
+    const stars = '⭐'.repeat(note) + '☆'.repeat(5-note);
+    if (bot.notifications_phone) {
+      const msg = `⚠️ *${bot.nom}* — Avis négatif reçu\n\nNote: ${stars} (${note}/5)\n${commentaire?`💬 "${commentaire.substring(0,200)}"\n\n`:''}👉 Répondez vite: ${CONFIG.BASE_URL}/dashboard/${botId}`;
+      sendWhatsApp(bot.notifications_phone, msg).catch(()=>{});
+    }
+    if (bot.notifications_email) {
+      const html = `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px"><h2 style="color:#dc2626">⚠️ Avis négatif sur ${bot.nom}</h2><p style="font-size:18px">${stars} (${note}/5)</p>${commentaire?`<blockquote style="border-left:4px solid #ef4444;padding:10px;background:#fef2f2;margin:10px 0">${commentaire}</blockquote>`:''}<p>Pensez à y répondre rapidement pour montrer votre engagement.</p><p><a href="${CONFIG.BASE_URL}/dashboard/${botId}" style="background:#00c875;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:bold">📊 Voir le dashboard</a></p></div>`;
+      sendEmail(bot.notifications_email, `⚠️ Avis ${note}/5 — ${bot.nom}`, html).catch(()=>{});
+    }
+  } catch(e) { console.error('notifyPatronAvisNegatif:', e.message); }
+}
 
 // ============================================
 // AUTH CLIENTS — Login / Register simple
@@ -2566,6 +2894,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <button class="tab-btn active" onclick="showTab('cmd',this)">📦 ${t(lang,'tab_orders')} (${commandes?.length||0})</button>
     <button class="tab-btn" onclick="showTab('rdv',this)">📅 ${t(lang,'tab_rdv')}</button>
     <button class="tab-btn" onclick="showTab('catalogue',this)">🛍️ Catalogue (${(bot.catalogue||[]).length})</button>
+    <button class="tab-btn" onclick="showTab('analytics',this)">📊 Analytics</button>
     <button class="tab-btn" onclick="showTab('msgs',this)">💬 ${t(lang,'tab_messages')} (${msgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('audio',this)">🎤 ${t(lang,'tab_audio')} (${audioMsgs?.length||0})</button>
     <button class="tab-btn" onclick="showTab('avis',this)">⭐ ${t(lang,'tab_reviews')} (${allAvis?.length||0})</button>
@@ -2736,6 +3065,27 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     </div>
   </div>
 
+  <!-- ANALYTICS -->
+  <div id="tab-analytics" class="tab">
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <span>📊 Analytics & Performance</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <select id="ana-period" onchange="loadAnalytics()" style="padding:6px 10px;border-radius:8px;border:1.5px solid #d1e5d8;font-size:12px;font-family:inherit;background:#fff">
+            <option value="7">7 derniers jours</option>
+            <option value="30" selected>30 derniers jours</option>
+            <option value="90">90 derniers jours</option>
+          </select>
+          <a href="/analytics/${bot.id}/export/commandes.csv?days=90" class="btn btn-g" style="font-size:11px;padding:6px 10px;text-decoration:none">📥 Export CSV</a>
+        </div>
+      </div>
+
+      <div id="ana-content">
+        <div style="text-align:center;color:#9ab0a0;padding:30px">Chargement des analytics...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- MESSAGES -->
   <div id="tab-msgs" class="tab">
     <div class="card">
@@ -2774,15 +3124,9 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
         <span>⭐ Avis clients</span>
         <span style="font-size:22px;font-weight:800;color:#f59e0b">${avgNote!=='—'?avgNote+'⭐':'Pas encore d\'avis'}</span>
       </div>
-      ${allAvis?.length?allAvis.map(a=>`
-        <div class="row">
-          <div>
-            <div class="stars">${'⭐'.repeat(a.note)}${'☆'.repeat(5-a.note)}</div>
-            ${a.commentaire?`<div class="msg-text" style="margin-top:4px">"${a.commentaire}"</div>`:''}
-            <div class="msg-time">${new Date(a.created_at).toLocaleString('fr-FR')}</div>
-          </div>
-        </div>
-      `).join(''):`<div class="empty">Aucun avis encore.</div>`}
+      <div id="avis-list-mgr">
+        <div style="text-align:center;color:#9ab0a0;padding:30px">Chargement...</div>
+      </div>
     </div>
   </div>
 
@@ -3083,6 +3427,8 @@ function showTab(id,btn){
   document.getElementById('tab-'+id).classList.add('active');
   btn.classList.add('active');
   if(id==='rdv') loadRdvSemaine();
+  if(id==='analytics') loadAnalytics();
+  if(id==='avis') avisLoad();
 }
 function copyLink(){
   navigator.clipboard.writeText(location.origin+'/chat/'+BID).then(function(){alert('Lien copie!');});
@@ -3226,6 +3572,236 @@ async function catDelete(idx){
     if(d.success){catLoad();}
     else{alert('Erreur: '+(d.error||'inconnu'));}
   }catch(e){alert('Erreur réseau');}
+}
+
+// ============================================
+// ANALYTICS — Graphiques + KPIs
+// ============================================
+var anaLoaded = false;
+async function loadAnalytics(){
+  var days = document.getElementById('ana-period')?.value || '30';
+  var content = document.getElementById('ana-content');
+  if(!content) return;
+  content.innerHTML = '<div style="text-align:center;color:#9ab0a0;padding:30px">Chargement...</div>';
+  try {
+    var r = await fetch('/analytics/' + BID + '?days=' + days);
+    var d = await r.json();
+    if(d.error){
+      content.innerHTML = '<div style="color:#ef4444;padding:20px;text-align:center">Erreur: ' + d.error + '</div>';
+      return;
+    }
+
+    var growth = d.revenue.growth_pct;
+    var growthColor = growth >= 0 ? '#00c875' : '#ef4444';
+    var growthIcon = growth >= 0 ? '📈' : '📉';
+
+    var html = '';
+
+    // KPIs
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px">';
+    html += '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px"><div style="font-size:11px;color:#166534;text-transform:uppercase;letter-spacing:.5px">Commandes</div><div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">' + d.orders.total + '</div></div>';
+    html += '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px"><div style="font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.5px">Revenus FCFA</div><div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">' + (d.revenue.total/1000).toFixed(1) + 'K</div><div style="font-size:11px;color:' + growthColor + ';font-weight:700;margin-top:2px">' + growthIcon + ' ' + (growth>=0?'+':'') + growth + '% vs période préc.</div></div>';
+    html += '<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:10px;padding:14px"><div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:.5px">Messages</div><div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">' + d.messages.total + '</div></div>';
+    html += '<div style="background:#fce7f3;border:1px solid #f9a8d4;border-radius:10px;padding:14px"><div style="font-size:11px;color:#9d174d;text-transform:uppercase;letter-spacing:.5px">RDV</div><div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">' + d.appointments.total + '</div></div>';
+    html += '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:10px;padding:14px"><div style="font-size:11px;color:#854d0e;text-transform:uppercase;letter-spacing:.5px">Note moy.</div><div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;color:#0a1a0f;margin-top:4px">' + (d.reviews.average||'—') + (d.reviews.average?'⭐':'') + '</div><div style="font-size:11px;color:#9ab0a0;margin-top:2px">' + d.reviews.total + ' avis</div></div>';
+    html += '</div>';
+
+    // Graphique commandes par jour (SVG simple, pas de dépendance)
+    html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px">';
+    html += '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">📦 Commandes par jour</div>';
+    html += anaSvgBarChart(d.orders.daily, '#00c875', 200);
+    html += '</div>';
+
+    // Graphique revenus par jour
+    html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px">';
+    html += '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">💰 Revenus par jour (FCFA)</div>';
+    html += anaSvgLineChart(d.revenue.daily, '#f59e0b', 200);
+    html += '</div>';
+
+    // Heures les plus actives
+    html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px">';
+    html += '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">🕐 Heures les plus actives</div>';
+    html += anaSvgBarChart(d.messages.hourly.map(function(x){return {date: String(x.hour).padStart(2,'0')+'h', count: x.count}}), '#3b82f6', 150, true);
+    html += '</div>';
+
+    // Distribution statuts
+    if(Object.keys(d.orders.by_status).length > 0){
+      html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px">';
+      html += '<div style="font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:10px">📊 Statuts des commandes</div>';
+      var statusColors = {pending:'#f59e0b',paid:'#10b981',preparing:'#3b82f6',ready:'#8b5cf6',delivered:'#6b7280',cancelled:'#ef4444',delivering:'#f59e0b'};
+      var totalSt = Object.values(d.orders.by_status).reduce(function(a,b){return a+b},0);
+      Object.entries(d.orders.by_status).forEach(function(entry){
+        var st = entry[0], cnt = entry[1];
+        var pct = totalSt ? (cnt/totalSt*100).toFixed(1) : 0;
+        html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">';
+        html += '<div style="width:90px;font-size:12px;text-transform:capitalize;color:#0a1a0f">' + st + '</div>';
+        html += '<div style="flex:1;background:#f0f4f1;border-radius:6px;height:18px;overflow:hidden"><div style="background:' + (statusColors[st]||'#666') + ';height:100%;width:' + pct + '%"></div></div>';
+        html += '<div style="font-size:12px;font-weight:700;color:#0a1a0f;min-width:50px;text-align:right">' + cnt + ' (' + pct + '%)</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    content.innerHTML = html;
+    anaLoaded = true;
+  } catch(e) {
+    content.innerHTML = '<div style="color:#ef4444;padding:20px;text-align:center">Erreur réseau: ' + e.message + '</div>';
+  }
+}
+
+function anaSvgBarChart(items, color, height, hourly){
+  if(!items||!items.length) return '<div style="text-align:center;color:#9ab0a0;padding:20px">Aucune donnée</div>';
+  var max = Math.max.apply(null, items.map(function(i){return i.count||0})) || 1;
+  var w = 100/items.length;
+  var svg = '<svg viewBox="0 0 100 ' + height + '" preserveAspectRatio="none" style="width:100%;height:' + height + 'px;display:block">';
+  items.forEach(function(it, i){
+    var h = ((it.count||0)/max) * (height-30);
+    var y = height - h - 20;
+    svg += '<rect x="' + (i*w + w*0.15) + '" y="' + y + '" width="' + (w*0.7) + '" height="' + h + '" fill="' + color + '" rx="1"><title>' + it.date + ': ' + (it.count||0) + '</title></rect>';
+  });
+  svg += '</svg>';
+  // Labels
+  var labels = '<div style="display:flex;justify-content:space-between;font-size:9px;color:#9ab0a0;margin-top:4px">';
+  if(hourly){
+    [0,6,12,18,23].forEach(function(h){ labels += '<span>' + String(h).padStart(2,'0') + 'h</span>'; });
+  } else {
+    var step = Math.max(1, Math.floor(items.length/6));
+    for(var i=0; i<items.length; i+=step){
+      var d = items[i].date.substring(5); // MM-DD
+      labels += '<span>' + d + '</span>';
+    }
+  }
+  labels += '</div>';
+  return svg + labels;
+}
+
+function anaSvgLineChart(items, color, height){
+  if(!items||!items.length) return '<div style="text-align:center;color:#9ab0a0;padding:20px">Aucune donnée</div>';
+  var max = Math.max.apply(null, items.map(function(i){return i.total||0})) || 1;
+  var w = 100/(items.length-1 || 1);
+  var points = items.map(function(it, i){
+    var h = ((it.total||0)/max) * (height-30);
+    var y = height - h - 20;
+    return (i*w) + ',' + y;
+  }).join(' ');
+  var svg = '<svg viewBox="0 0 100 ' + height + '" preserveAspectRatio="none" style="width:100%;height:' + height + 'px;display:block">';
+  // Aire
+  svg += '<polygon points="0,' + (height-20) + ' ' + points + ' 100,' + (height-20) + '" fill="' + color + '" opacity="0.15"/>';
+  // Ligne
+  svg += '<polyline points="' + points + '" stroke="' + color + '" stroke-width="0.5" fill="none"/>';
+  // Points
+  items.forEach(function(it, i){
+    var h = ((it.total||0)/max) * (height-30);
+    var y = height - h - 20;
+    svg += '<circle cx="' + (i*w) + '" cy="' + y + '" r="0.8" fill="' + color + '"><title>' + it.date + ': ' + (it.total||0).toLocaleString('fr-FR') + ' FCFA</title></circle>';
+  });
+  svg += '</svg>';
+  // Légende max
+  var labels = '<div style="display:flex;justify-content:space-between;font-size:9px;color:#9ab0a0;margin-top:4px"><span>0</span><span>Max: ' + max.toLocaleString('fr-FR') + ' FCFA</span></div>';
+  return svg + labels;
+}
+
+// ============================================
+// AVIS — Modération + réponse patron
+// ============================================
+async function avisLoad(){
+  try {
+    var [statsR, listR] = await Promise.all([
+      fetch('/avis/stats/' + BID),
+      fetch('/avis/list/' + BID)
+    ]);
+    var stats = await statsR.json();
+    var list = await listR.json();
+    var el = document.getElementById('avis-list-mgr');
+    if(!el) return;
+
+    var html = '';
+    // Stats résumé
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px">';
+    html += '<div style="background:#f0fdf4;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#0a1a0f">' + (stats.moyenne||'—') + '</div><div style="font-size:10px;color:#5a7060">Note moy.</div></div>';
+    html += '<div style="background:#fef3c7;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#0a1a0f">' + stats.total + '</div><div style="font-size:10px;color:#5a7060">Avis visibles</div></div>';
+    html += '<div style="background:#fee2e2;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#0a1a0f">' + stats.negatifs + '</div><div style="font-size:10px;color:#5a7060">Négatifs</div></div>';
+    html += '<div style="background:#dbeafe;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#0a1a0f">' + stats.a_repondre + '</div><div style="font-size:10px;color:#5a7060">À répondre</div></div>';
+    html += '</div>';
+
+    // Distribution étoiles
+    html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:14px">';
+    [5,4,3,2,1].forEach(function(n){
+      var c = stats.distribution[n]||0;
+      var pct = stats.total ? (c/stats.total*100).toFixed(0) : 0;
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+      html += '<div style="width:50px;font-size:11px">' + '⭐'.repeat(n) + '</div>';
+      html += '<div style="flex:1;background:#f0f4f1;border-radius:4px;height:10px;overflow:hidden"><div style="background:#f59e0b;height:100%;width:' + pct + '%"></div></div>';
+      html += '<div style="font-size:11px;color:#5a7060;min-width:40px;text-align:right">' + c + ' (' + pct + '%)</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // Liste des avis
+    if(!list.length){
+      html += '<div style="text-align:center;color:#9ab0a0;padding:20px">Aucun avis encore.</div>';
+    } else {
+      list.forEach(function(a){
+        var visible = a.visible !== false;
+        var stars = '⭐'.repeat(a.note) + '☆'.repeat(5-a.note);
+        var bg = visible ? '#fff' : '#f9fafb';
+        var opacity = visible ? '1' : '0.5';
+        html += '<div data-aid="' + a.id + '" style="background:' + bg + ';border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px;opacity:' + opacity + '">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">';
+        html += '<div><div style="font-size:14px;color:#f59e0b">' + stars + '</div><div style="font-size:10px;color:#9ab0a0;margin-top:2px">' + new Date(a.created_at).toLocaleString('fr-FR') + '</div></div>';
+        html += '<div style="display:flex;gap:4px">';
+        html += '<button data-toggle-id="' + a.id + '" data-make-visible="' + (!visible) + '" style="padding:4px 8px;border-radius:6px;border:1px solid #d1e5d8;background:#fff;font-size:10px;cursor:pointer;font-family:inherit;color:#0a1a0f">' + (visible?'👁️ Visible':'🚫 Masqué') + '</button>';
+        html += '</div>';
+        html += '</div>';
+        if(a.commentaire){
+          html += '<div style="font-size:13px;color:#0a1a0f;margin:8px 0;padding:8px;background:#f9faf9;border-radius:6px">"' + a.commentaire.replace(/</g,'&lt;') + '"</div>';
+        }
+        if(a.reponse){
+          html += '<div style="margin-top:8px;padding:8px;background:#dcfce7;border-left:3px solid #00c875;border-radius:4px"><div style="font-size:10px;color:#166534;font-weight:700;margin-bottom:2px">↳ Votre réponse</div><div style="font-size:12px;color:#0a1a0f">' + a.reponse.replace(/</g,'&lt;') + '</div></div>';
+        } else {
+          html += '<div style="margin-top:8px"><textarea data-aid="' + a.id + '" placeholder="Répondre à cet avis..." style="width:100%;padding:8px;border:1px solid #d1e5d8;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical;min-height:50px"></textarea>';
+          html += '<button data-reply-id="' + a.id + '" style="margin-top:4px;background:#00c875;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">💬 Répondre</button></div>';
+        }
+        html += '</div>';
+      });
+    }
+    el.innerHTML = html;
+    // Hook les boutons (évite le problème d'échappement onclick="")
+    el.querySelectorAll('[data-toggle-id]').forEach(function(b){
+      b.addEventListener('click', function(){
+        avisToggle(b.getAttribute('data-toggle-id'), b.getAttribute('data-make-visible')==='true');
+      });
+    });
+    el.querySelectorAll('[data-reply-id]').forEach(function(b){
+      b.addEventListener('click', function(){
+        avisRepondre(b.getAttribute('data-reply-id'));
+      });
+    });
+  } catch(e) {
+    var el2 = document.getElementById('avis-list-mgr');
+    if(el2) el2.innerHTML = '<div style="color:#ef4444;padding:20px">Erreur: ' + e.message + '</div>';
+  }
+}
+
+async function avisRepondre(id){
+  var card = document.querySelector('[data-aid="'+id+'"]');
+  var ta = card?.querySelector('textarea[data-aid="'+id+'"]');
+  if(!ta) return;
+  var rep = ta.value.trim();
+  if(!rep){ alert('Entrez une réponse'); return; }
+  try {
+    var r = await fetch('/avis/' + id + '/repondre', {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({reponse: rep})});
+    var d = await r.json();
+    if(d.success) avisLoad();
+    else alert('Erreur: ' + (d.error||'inconnu'));
+  } catch(e){ alert('Erreur réseau'); }
+}
+
+async function avisToggle(id, makeVisible){
+  try {
+    await fetch('/avis/' + id + '/visibilite', {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({visible: makeVisible})});
+    avisLoad();
+  } catch(e){ alert('Erreur réseau'); }
 }
 
 loadWorkflows();
@@ -3945,10 +4521,11 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 <body>
 <div class="hd">
   ${bot.logo_url?`<img class="hd-logo" src="${bot.logo_url}" alt="${bot.nom}"/>`:`<div class="hd-ava">${bot.emoji}</div>`}
-  <div>
+  <div style="flex:1">
     <div class="hd-nm">${bot.nom}</div>
     <div class="hd-st"><span class="hd-dot"></span>En ligne — wolof & français 🎤</div>
   </div>
+  <button class="hd-restart" id="hd-restart" title="Recommencer la conversation" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:36px;height:36px;border-radius:10px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">↻</button>
 </div>
 
 <div class="msgs" id="msgs">
@@ -4017,11 +4594,24 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 </div>
 
 <script>
-var sid='p_'+Math.random().toString(36).substr(2,9);
+// Persistance du sid dans localStorage pour garder le contexte entre rechargements
+var sid;
+try {
+  var saved = localStorage.getItem('samabot_sid_${req.params.botId}');
+  if(saved && saved.length > 5) sid = saved;
+} catch(e){}
+if(!sid){
+  sid = 'p_' + Math.random().toString(36).substr(2,9);
+  try { localStorage.setItem('samabot_sid_${req.params.botId}', sid); } catch(e){}
+}
 var botId='${req.params.botId}';
 var BID=botId;
 var logoSrc='${bot.logo_url||''}';
 var botEmoji='${bot.emoji}';
+var BOT_NAME='${(bot.nom||'').replace(/'/g, "\\'")}';
+var BOT_LOGO=logoSrc;
+var BOT_EMOJI=botEmoji;
+window.__INIT_QR = ${JSON.stringify(qr)};
 var isRec=false,mediaRec=null,audioChunks=[];
 
 document.getElementById('inp').onkeydown=function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}};
@@ -4468,9 +5058,79 @@ function send(t){
     addMsg(data.reply||'Désolé, erreur.',false);
     if(data.actions?.length)renderActions(data.actions);
     if(data.catalogue?.length)renderCat(data.catalogue);
+    // Animation confirmation visuelle si commande validée
+    if(data.reply && /commande\s+confirm[ée]/i.test(data.reply)){
+      showOrderConfirmedAnimation();
+    }
   })
   .catch(()=>{var ty=document.getElementById('typing');if(ty)ty.remove();addMsg('Désolé, erreur. Réessayez.',false);});
 }
+
+// Animation de confirmation de commande (checkmark vert qui apparaît)
+function showOrderConfirmedAnimation(){
+  var existing = document.getElementById('order-confirmed-anim');
+  if(existing) existing.remove();
+  var div = document.createElement('div');
+  div.id = 'order-confirmed-anim';
+  div.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#00c875;color:#fff;padding:30px 40px;border-radius:20px;font-size:16px;font-weight:700;text-align:center;z-index:9999;box-shadow:0 10px 40px rgba(0,200,117,0.4);animation:popIn .4s ease;font-family:inherit';
+  div.innerHTML = '<div style="font-size:60px;margin-bottom:10px;animation:bounce .6s ease">✅</div>Commande confirmée!';
+  document.body.appendChild(div);
+  // Style anim si pas déjà présent
+  if(!document.getElementById('order-anim-css')){
+    var s = document.createElement('style');
+    s.id = 'order-anim-css';
+    s.textContent = '@keyframes popIn{0%{transform:translate(-50%,-50%) scale(0);opacity:0}60%{transform:translate(-50%,-50%) scale(1.1)}100%{transform:translate(-50%,-50%) scale(1);opacity:1}}@keyframes bounce{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}';
+    document.head.appendChild(s);
+  }
+  setTimeout(function(){
+    div.style.transition = 'opacity .4s';
+    div.style.opacity = '0';
+    setTimeout(function(){ div.remove(); }, 400);
+  }, 1800);
+}
+
+// Bouton "Recommencer la conversation"
+function restartConversation(){
+  if(!confirm('Recommencer la conversation? Votre historique sera effacé.')) return;
+  // Nouvelle session ID
+  sid = botId + '_' + Date.now();
+  try { localStorage.setItem('samabot_sid_' + botId, sid); } catch(e){}
+  // Vider le chat sauf le message d'accueil
+  var msgs = document.getElementById('msgs');
+  msgs.innerHTML = '';
+  // Remettre message d'accueil
+  var welcome = document.createElement('div');
+  welcome.className = 'msg';
+  welcome.innerHTML = '<div class="av">' + (BOT_LOGO ? '<img src="'+BOT_LOGO+'" alt=""/>' : BOT_EMOJI) + '</div><div class="bub b">Asalaa maalekum! 👋 Bienvenue chez <strong>' + BOT_NAME + '</strong>.<br><br>Écrivez ou utilisez le 🎤 pour parler en wolof ou français!</div>';
+  msgs.appendChild(welcome);
+  // Vider zones d'actions
+  document.getElementById('actions').innerHTML='';
+  document.getElementById('catalogue').style.display='none';
+  document.getElementById('rating').style.display='none';
+  // Re-rendre les suggestions QR
+  renderInitialSuggestions();
+}
+
+// Suggestions intelligentes selon la niche/catalogue
+function renderInitialSuggestions(){
+  var qrEl = document.getElementById('qr');
+  if(!qrEl) return;
+  qrEl.innerHTML = '';
+  var suggestions = window.__INIT_QR || [];
+  suggestions.forEach(function(s){
+    var b = document.createElement('button');
+    b.className = 'qb';
+    b.textContent = s;
+    b.onclick = function(){ send(s); };
+    qrEl.appendChild(b);
+  });
+}
+
+// Hook bouton recommencer
+(function(){
+  var btn = document.getElementById('hd-restart');
+  if(btn) btn.addEventListener('click', restartConversation);
+})();
 </script>
 </body>
 </html>`);
