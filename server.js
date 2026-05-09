@@ -3071,6 +3071,95 @@ async function createOrderFromConfirmation(botId, sessionId, total, bot, recapTe
 }
 
 // Helper: extrait les infos client depuis le texte du récapitulatif du bot
+// ============================================
+// 📞 NORMALISATION TÉLÉPHONES — Afrique de l'Ouest francophone + diaspora
+// Couvre: Sénégal, Mauritanie, Mali, Côte d'Ivoire, Burkina Faso, Niger, Guinée,
+// Togo, Bénin, France (diaspora), USA/Canada (diaspora), Belgique, Suisse, Maroc
+// ============================================
+//
+// Ranges valides par pays (préfixe local):
+//   🇸🇳 Sénégal +221:    70/75/76/77/78 + 7 chiffres
+//   🇲🇷 Mauritanie +222: 2/3/4 + 7 chiffres (8 total)
+//   🇲🇱 Mali +223:       6/7/9 + 7 chiffres (8 total)
+//   🇨🇮 Côte d'Ivoire +225: 01/05/07 + 8 chiffres (10 total — depuis 2021)
+//   🇧🇫 Burkina Faso +226: 5/6/7 + 7 chiffres (8 total)
+//   🇳🇪 Niger +227:      8/9 + 7 chiffres (8 total)
+//   🇹🇬 Togo +228:       7/9 + 7 chiffres (8 total)
+//   🇧🇯 Bénin +229:      4/5/6/9 + 7 chiffres (8 total)
+//   🇬🇳 Guinée +224:     6 + 8 chiffres (9 total)
+//   🇫🇷 France +33:      6/7 + 8 chiffres (9 total, après le 0 initial)
+//   🇲🇦 Maroc +212:      6/7 + 8 chiffres (9 total)
+//   🇧🇪 Belgique +32:    4 + 8 chiffres (9 total)
+//   🇨🇭 Suisse +41:      7 + 8 chiffres (9 total)
+//   🇺🇸 USA/Canada +1:   10 chiffres
+function normalizePhoneAfrica(raw) {
+  if (!raw) return null;
+  // Nettoie tous les séparateurs (espaces, tirets, points, parenthèses)
+  let tel = String(raw).replace(/[\s.\-()]/g,'').trim();
+  if (!tel) return null;
+
+  // Cas 1: déjà international avec + → on garde tel quel (validation basique)
+  if (tel.startsWith('+')) {
+    if (/^\+\d{8,15}$/.test(tel)) return tel;
+    return null;
+  }
+
+  // Cas 2: commence par 00 (style international ancien) → remplace par +
+  if (tel.startsWith('00')) {
+    const candidate = '+' + tel.substring(2);
+    if (/^\+\d{8,15}$/.test(candidate)) return candidate;
+    return null;
+  }
+
+  // Cas 3: commence par un indicatif sans + (221, 222, 223, 225, etc.)
+  // Note: ordre important — on teste les indicatifs 3 chiffres AVANT 2/1 chiffres
+  // pour éviter qu'un numéro CI "225..." soit interprété comme USA "1..." (impossible vu qu'on ne fait pas ça mais bon)
+  const indicatifsLong = ['221','222','223','224','225','226','227','228','229','212'];
+  for (const ind of indicatifsLong) {
+    if (tel.startsWith(ind)) {
+      const rest = tel.substring(ind.length);
+      // Vérifier que ce qui reste est cohérent (7-10 chiffres pour le numéro local)
+      if (rest.length >= 7 && rest.length <= 10 && /^\d+$/.test(rest)) {
+        return '+' + tel;
+      }
+    }
+  }
+  // Indicatifs courts (33, 32, 41, 1) — seulement si la longueur totale fait sens
+  if (tel.startsWith('33') && tel.length === 11) return '+' + tel;
+  if (tel.startsWith('32') && tel.length === 11) return '+' + tel;
+  if (tel.startsWith('41') && tel.length === 11) return '+' + tel;
+  // L'indicatif 1 (USA) — seulement si total = 11 chiffres (ex: 14104597653)
+  if (tel.startsWith('1') && tel.length === 11 && /^1[2-9]\d{9}$/.test(tel)) return '+' + tel;
+
+  // Cas 4: commence par 0 (style français/européen)
+  if (tel.startsWith('0') && tel.length === 10) {
+    const rest = tel.substring(1);
+    // 9 chiffres après le 0 commençant par 6 ou 7 → français
+    if (/^[67]\d{8}$/.test(rest)) return '+33' + rest;
+  }
+
+  // Cas 5: numéro local 9 chiffres commençant par 7 → SÉNÉGAL (marché principal, on priorise)
+  if (/^7[05678]\d{7}$/.test(tel)) return '+221' + tel;
+
+  // Cas 6: numéro local 10 chiffres — USA/Canada (ex: 4104597653)
+  // On priorise USA car ce format est rarement utilisé en Afrique de l'Ouest
+  if (/^[2-9]\d{9}$/.test(tel) && tel.length === 10) {
+    // Si commence par 0[157] ou 2[57] → Côte d'Ivoire (10 chiffres aussi depuis 2021)
+    if (/^(0[157]|2[57])\d{8}$/.test(tel)) return '+225' + tel;
+    return '+1' + tel;
+  }
+
+  // Cas 7: 9 chiffres commençant par 6 → Guinée probable (rare au Sénégal)
+  if (/^6\d{8}$/.test(tel) && tel.length === 9) return '+224' + tel;
+
+  // Cas 8: dernier recours — numéro 9-10 chiffres assumé sénégalais
+  // (compatibilité ascendante avec l'ancien comportement)
+  if (/^\d{9,10}$/.test(tel) && tel.startsWith('7')) return '+221' + tel;
+
+  // Pas de match clair → retourner null
+  return null;
+}
+
 function extractInfosFromRecap(text) {
   if (!text) return {};
   const get = (re) => {
@@ -3089,10 +3178,7 @@ function extractInfosFromRecap(text) {
     tel: (function(){
       const m = text.match(/(?:téléphone|telephone|tel|phone)\s*[:\-]\s*\*?\s*([+\d][\d\s.\-+()]{6,20})\s*\*?/i);
       if (!m) return null;
-      let tel = m[1].replace(/[\s.\-()]/g,'');
-      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
-      else if (!tel.startsWith('+') && tel.length >= 9) tel = '+' + tel.replace(/^00/,'');
-      return tel;
+      return normalizePhoneAfrica(m[1]);
     })(),
     email: (function(){
       const m = text.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
@@ -3120,8 +3206,14 @@ async function extractInfosFromMessages(botId, sessionId) {
     const fullText = msgs.map(m => m.content).join(' ');
 
     const emailMatch = fullText.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
-    const telMatch = fullText.match(/\+\d{8,15}/) ||
-                     fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/);
+    // Capture tous les formats: +221xxx, 00221xxx, 221xxx, 077xxx, 77xxx, etc.
+    const telMatch = fullText.match(/\+\d[\d\s.\-()]{7,18}\d/) ||
+                     fullText.match(/\b00\d{8,13}\b/) ||
+                     fullText.match(/\b22[1-9]\d{7,9}\b/) ||  // 221/222/223/225/226/227/228/229
+                     fullText.match(/\b212\d{8,9}\b/) ||       // Maroc
+                     fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/) ||  // Sénégal sans préfixe
+                     fullText.match(/\b0[67]\d{8}\b/) ||         // France style 06/07
+                     fullText.match(/\b\d{10}\b/);              // US/Canada 10 chiffres bruts
     // Adresse: priorité 1 = format GPS explicite, priorité 2 = mot "adresse" mais filtrer les fausses
     let adresseMatch = fullText.match(/Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*([^.\n(]+?)(?:\s*\(|\.|$|\n)/i);
     if (!adresseMatch) {
@@ -3149,9 +3241,8 @@ async function extractInfosFromMessages(botId, sessionId) {
     const out = {};
     if (emailMatch) out.email = emailMatch[0].toLowerCase();
     if (telMatch) {
-      let tel = telMatch[0].replace(/[\s.\-()]/g,'');
-      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
-      out.tel = tel;
+      const normalized = normalizePhoneAfrica(telMatch[0]);
+      if (normalized) out.tel = normalized;
     }
     if (adresseMatch) {
       const addr = adresseMatch[1].trim().substring(0,200);
@@ -3225,10 +3316,13 @@ async function updateCommandeInfos(commandeId, sessionId, botId) {
 
     // Extrait email
     const emailMatch = fullText.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
-    // Extrait téléphone (formats internationaux + sénégalais)
-    const telMatch = fullText.match(/\+\d{8,15}/) ||
-                     fullText.match(/(?:00\d{8,13})/) ||
+    // Extrait téléphone (formats internationaux + Afrique de l'Ouest francophone + diaspora)
+    const telMatch = fullText.match(/\+\d[\d\s.\-()]{7,18}\d/) ||
+                     fullText.match(/\b00\d{8,13}\b/) ||
+                     fullText.match(/\b22[1-9]\d{7,9}\b/) ||
+                     fullText.match(/\b212\d{8,9}\b/) ||
                      fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/) ||
+                     fullText.match(/\b0[67]\d{8}\b/) ||
                      fullText.match(/\b\d{9,10}\b/);
     // Extrait adresse depuis les messages GPS ou texte
     const adresseMatch = fullText.match(/(?:Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*)([^(.\n]+)/i) ||
@@ -3239,11 +3333,8 @@ async function updateCommandeInfos(commandeId, sessionId, botId) {
     const updates = {};
     if (emailMatch) updates.client_email = emailMatch[0].toLowerCase();
     if (telMatch) {
-      let tel = telMatch[0].replace(/[\s.-]/g,'');
-      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
-      else if (/^00/.test(tel)) tel = '+' + tel.substring(2);
-      else if (!tel.startsWith('+') && tel.length >= 9) tel = '+221' + tel.replace(/^221/,'');
-      updates.client_tel = tel;
+      const normalized = normalizePhoneAfrica(telMatch[0]);
+      if (normalized) updates.client_tel = normalized;
     }
     if (adresseMatch) {
       const addr = adresseMatch[1].trim().substring(0, 200);
