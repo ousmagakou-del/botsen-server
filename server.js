@@ -420,7 +420,10 @@ app.post('/chat', async (req, res) => {
       reply = workflowReply;
       console.log(`⚡ Réponse workflow pour bot ${botId}`);
     } else {
-      reply = await callAI(bot.prompt, sid, message);
+      // 🔄 Toujours utiliser le prompt fraîchement calculé (pas celui en DB)
+      // Comme ça les anciens bots bénéficient automatiquement du nouveau flux
+      const freshPrompt = makePrompt(bot);
+      reply = await callAI(freshPrompt, sid, message);
     }
 
     // Détecte si le BOT demande l'adresse dans sa réponse
@@ -443,17 +446,17 @@ app.post('/chat', async (req, res) => {
       if (extracted > 0 && extracted < 10000000) orderTotal = extracted;
     }
 
-    // 🆕 Nouveau flux: ne crée la commande QU'À LA CONFIRMATION du client
-    // Détection de la confirmation: le CLIENT a tapé "oui", "confirme", "valider"... 
-    // ET le bot a précédemment fait un récapitulatif (présence de "récapitulatif" dans l'historique)
+    // 🆕 Détection robuste de la confirmation finale d'une commande
+    // Cas 1: le BOT dit "commande confirmée" (le bot a déjà toutes les infos)
+    // Cas 2: le CLIENT dit "oui/ok/confirme" après un récap explicite du bot
+    const botConfirmingOrder = /✅\s*\*?\s*commande\s+confirm[ée]/i.test(reply) ||
+                                /commande\s+confirm[ée]\s*[!.\s]/i.test(reply);
     const confirmationKeywords = /^\s*(oui|ouais|yes|ok|d'accord|confirme[rz]?|valide[rz]?|c'est bon|c bon|parfait|allez[\s-]?y|go|waaw|d'acc)\b/i;
     const isClientConfirming = confirmationKeywords.test(message.trim());
 
-    // Vérifier dans l'historique si le bot a déjà fait un récapitulatif AVANT ce nouveau reply
-    // (callAI a déjà ajouté le nouveau reply à l'history, donc on prend l'avant-dernier message assistant)
+    // Historique pour récupérer le récap (avant-dernier message assistant)
     const history = getHist(sid);
     const assistantMsgs = history.filter(h => h.role === 'assistant');
-    // L'avant-dernier message assistant = celui auquel le client est en train de répondre
     const previousBotMsg = assistantMsgs.length >= 2 ? assistantMsgs[assistantMsgs.length - 2] : null;
     const lastBotHadRecap = previousBotMsg && /récapitulatif|recapitulatif|recap|confirmez-vous/i.test(previousBotMsg.content);
 
@@ -463,18 +466,29 @@ app.post('/chat', async (req, res) => {
       intents.push('payment');
     }
 
-    // 🎯 Création commande UNIQUEMENT quand: client confirme APRÈS récap du bot
-    if (isClientConfirming && lastBotHadRecap) {
-      console.log(`✅ Confirmation client détectée pour bot ${botId} — création commande`);
-      // On extrait le total depuis le récap du bot (previousBotMsg)
+    // 🎯 Création commande déclenchée par:
+    //   - Le bot lui-même dit "Commande confirmée!" dans sa réponse, OU
+    //   - Le client dit "oui/ok/confirme" après un récap du bot
+    const shouldCreateOrder = botConfirmingOrder || (isClientConfirming && lastBotHadRecap);
+
+    if (shouldCreateOrder) {
+      const trigger = botConfirmingOrder ? 'bot a confirmé' : 'client a confirmé';
+      console.log(`✅ Création commande déclenchée (${trigger}) pour bot ${botId}`);
+
+      // Concatène TOUS les messages du bot pour chercher le récap/total
+      const allBotMsgs = assistantMsgs.map(m => m.content).join('\n') + '\n' + reply;
+      const sourceText = allBotMsgs;
+
+      // Extraire le total — cherche dans tout l'historique
       let totalFromRecap = 0;
-      const recapTotalMatch = previousBotMsg.content.match(/total[^:]*[:\s]*\*?\s*([0-9][0-9\s]*)\s*\*?\s*f?cfa/i);
+      const recapTotalMatch = sourceText.match(/total[^:]*[:\s]*\*?\s*([0-9][0-9\s]*)\s*\*?\s*f?cfa/i);
       if (recapTotalMatch) {
         totalFromRecap = parseInt(recapTotalMatch[1].replace(/\s/g,'')) || 0;
       }
       const finalTotal = totalFromRecap || orderTotal || 0;
-      // Crée la commande + envoie TOUTES les notifs (patron + client) en une fois
-      createOrderFromConfirmation(botId, sid, finalTotal, bot, previousBotMsg.content).catch(e=>console.error('createOrder err:', e.message));
+
+      // Crée la commande + envoie TOUTES les notifs (patron + client) en UNE fois
+      createOrderFromConfirmation(botId, sid, finalTotal, bot, sourceText).catch(e=>console.error('createOrder err:', e.message));
     }
 
     // Si commande sans total encore → GPS pour adresse
@@ -524,9 +538,9 @@ app.post('/chat/voice', async (req, res) => {
     const sid = sessionId || `${botId}_voice_${Date.now()}`;
     db.insert('audio_messages', { bot_id:botId, session_id:sid, transcription, langue_detectee:detectLang(transcription) }).catch(()=>{});
 
-    // Réponse IA
+    // Réponse IA — prompt frais
     const intents = detectIntent(transcription, bot);
-    const reply = await callAI(bot.prompt, sid, transcription);
+    const reply = await callAI(makePrompt(bot), sid, transcription);
 
     let orderTotal = 0;
     const totalMatch = reply.match(/total\s*[:\-]?\s*([0-9][0-9\s]*)\s*f?cfa/i);
@@ -2022,6 +2036,13 @@ function extractInfosFromRecap(text) {
     const m = text.match(re);
     return m ? m[1].trim() : null;
   };
+  // Helper: filtre les fausses adresses (FCFA, prix purs)
+  const filterAddr = (a) => {
+    if (!a) return null;
+    if (/fcfa/i.test(a)) return null;
+    if (/^\s*\d+[\s,.]*$/.test(a)) return null;
+    return a;
+  };
   return {
     nom: get(/(?:nom|prénom)\s*[:\-]\s*\*?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'-]{1,40}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰)/i),
     tel: (function(){
@@ -2036,7 +2057,14 @@ function extractInfosFromRecap(text) {
       const m = text.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
       return m ? m[0].toLowerCase() : null;
     })(),
-    adresse: get(/(?:adresse|livraison)\s*[:\-]\s*\*?\s*([^\n*📞📧🛍️💰🛵👤]{5,150}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i),
+    // Adresse: prioriser "📍 Adresse:" formal, puis "Mon adresse de livraison est:", éviter "livraison: 1000 FCFA"
+    adresse: filterAddr(
+      get(/📍\s*(?:adresse|livraison)\s*[:\-]\s*\*?\s*([^\n*📞📧🛍️💰🛵👤]{5,150}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i) ||
+      get(/(?:^|\n)\s*adresse\s*[:\-]\s*\*?\s*([^\n*📞📧🛍️💰🛵👤]{5,150}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i) ||
+      get(/Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*([^.\n(]+?)(?:\s*\(|\.|$|\n)/i) ||
+      get(/Livraison à\s+([^,.\n]+(?:,\s*[^,.\n]+){0,2}?)\s+dans\s+/i) ||
+      get(/Livraison à\s+([^,.\n]+(?:,\s*[^,.\n]+){0,2})/i)
+    ),
     article: get(/(?:article|produit|commande)\s*[:\-]\s*\*?\s*([^\n*📞📧💰🛵👤📍]{2,100}?)\s*\*?\s*(?:\n|$|📞|📍|📧|🛍️|💰|🛵|👤)/i),
   };
 }
@@ -2053,9 +2081,29 @@ async function extractInfosFromMessages(botId, sessionId) {
     const emailMatch = fullText.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
     const telMatch = fullText.match(/\+\d{8,15}/) ||
                      fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/);
-    const adresseMatch = fullText.match(/(?:Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*)([^(.\n]+)/i) ||
-                         fullText.match(/(?:adresse|j'habite|livraison)\s*[:à]?\s*([^(.\n]{5,80})/i);
-    const nomMatch = fullText.match(/(?:je m'appelle|je suis|c'est|mon (?:nom|prénom)(?:\s+est)?|moi c'est)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
+    // Adresse: priorité 1 = format GPS explicite, priorité 2 = mot "adresse" mais filtrer les fausses
+    let adresseMatch = fullText.match(/Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*([^.\n(]+?)(?:\s*\(|\.|$|\n)/i);
+    if (!adresseMatch) {
+      adresseMatch = fullText.match(/(?:j'habite|je suis (?:à|au)|livr(?:er|aison)\s+(?:à|au))\s*[:à]?\s*([^(.\n]{5,80})/i);
+    }
+    if (!adresseMatch) {
+      adresseMatch = fullText.match(/adresse\s*[:est]*\s*([^(.\n]{5,80})/i);
+    }
+
+    // Pattern 1: "je m'appelle X" / "mon nom est X" / etc.
+    let nomMatch = fullText.match(/(?:je m'appelle|je suis|c'est|mon (?:nom|prénom)(?:\s+est)?|moi c'est)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
+    // Pattern 2: <prénom> [<nom>] <téléphone> — typique du Sénégal "ousmane gakou +221..."
+    if (!nomMatch) {
+      nomMatch = fullText.match(/\b([A-Za-zÀ-ÿ]{2,20}(?:\s+[A-Za-zÀ-ÿ]{2,20})?)\s+(?:\+?221|7[05678])/i);
+    }
+    // Pattern 3: début de message avec juste 1-2 mots suivis du numéro (ex: "Aminata 771234567")
+    if (!nomMatch) {
+      // Cherche dans chaque message individuel
+      for (const m of msgs) {
+        const direct = m.content.match(/^([A-Za-zÀ-ÿ]{2,20}(?:\s+[A-Za-zÀ-ÿ]{2,20})?)\s+\+?\d{8,}/);
+        if (direct) { nomMatch = direct; break; }
+      }
+    }
 
     const out = {};
     if (emailMatch) out.email = emailMatch[0].toLowerCase();
@@ -2064,10 +2112,18 @@ async function extractInfosFromMessages(botId, sessionId) {
       if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
       out.tel = tel;
     }
-    if (adresseMatch) out.adresse = adresseMatch[1].trim().substring(0,200);
+    if (adresseMatch) {
+      const addr = adresseMatch[1].trim().substring(0,200);
+      // Filtrer les faux positifs (ex: "1000 FCFA" qui matche par erreur)
+      if (!/fcfa|^\d+\s*$/i.test(addr) && addr.length > 4) {
+        out.adresse = addr;
+      }
+    }
     if (nomMatch) {
       const n = nomMatch[1].trim();
-      if (n.length > 1 && !/^(le|la|les|un|une|et|ou|de)$/i.test(n)) out.nom = n;
+      // Filtrer les faux positifs (mots communs)
+      const faux = /^(le|la|les|un|une|et|ou|de|du|des|mon|ma|mes|pour|avec|chez|sur|sous|oui|non|bonjour|salut|merci|salam|bjr|bsr|adresse|gps|tel|telephone|email|mail|nom|prenom|livraison|commande|cafe|the|pizza|burger)$/i;
+      if (n.length > 1 && !faux.test(n)) out.nom = n;
     }
     return out;
   } catch(e) { return {}; }
@@ -4766,9 +4822,9 @@ async function handleWhatsAppMessage(bot, fromPhone, text, source) {
     // Vérifie d'abord les workflows
     let reply = await runWorkflows(bot.id, text, sid);
 
-    // Sinon appelle l'IA
+    // Sinon appelle l'IA — prompt frais
     if (!reply) {
-      reply = await callAI(bot.prompt, sid, text);
+      reply = await callAI(makePrompt(bot), sid, text);
     }
 
     if (!reply) {
