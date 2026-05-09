@@ -1365,6 +1365,155 @@ setInterval(checkAndSendRecaps, 60 * 60 * 1000);
 // Et au démarrage (utile si serveur redémarre à 9h05 par ex.)
 setTimeout(checkAndSendRecaps, 5000);
 
+// ============================================
+// MARKETING AUTOMATISÉ
+// 1. Panier abandonné (commande pending depuis > 2h, pas confirmée)
+// 2. Reminder RDV (J-1)
+// 3. Anniversaire client (date_naissance dans la DB)
+// ============================================
+
+// Vérifie et envoie les rappels marketing
+async function runMarketingAutomations() {
+  await abandonedCartReminders().catch(e => console.error('abandonedCart:', e.message));
+  await rdvReminders().catch(e => console.error('rdvReminders:', e.message));
+  await birthdayReminders().catch(e => console.error('birthdays:', e.message));
+}
+
+// 1️⃣ Panier abandonné: commande pending depuis 2h-24h, pas encore relancée
+async function abandonedCartReminders() {
+  try {
+    // Cherche les commandes pending entre 2h et 24h, pas encore relancées
+    const since = new Date(Date.now() - 24*3600000).toISOString();
+    const until = new Date(Date.now() - 2*3600000).toISOString();
+    const cmds = await db.select('commandes', `?statut=eq.pending&created_at=gte.${since}&created_at=lte.${until}&limit=200`);
+    if (!cmds?.length) return;
+
+    for (const cmd of cmds) {
+      // Skip si déjà relancée ou pas d'infos client
+      if (cmd.relance_envoyee || (!cmd.client_tel && !cmd.client_email)) continue;
+      if (!cmd.total || cmd.total === 0) continue; // Skip commandes vides
+
+      // Récupérer le bot
+      const bots = await db.select('bots', `?id=eq.${cmd.bot_id}&select=nom,couleur,emoji,notifications_phone`);
+      const bot = bots?.[0];
+      if (!bot) continue;
+
+      const totalFmt = (cmd.total||0).toLocaleString('fr-FR');
+      console.log(`🛒 Relance panier abandonné: ${cmd.numero} (${bot.nom})`);
+
+      // WhatsApp client (priorité)
+      if (cmd.client_tel) {
+        const msg = `👋 *${bot.nom}*\n\nVous aviez commencé une commande de *${totalFmt} FCFA*.\n\nElle vous attend toujours ! 🎁\n\nTerminez-la ici: ${CONFIG.BASE_URL}/chat/${cmd.bot_id}\n\nDes questions? Répondez à ce message.`;
+        sendWhatsApp(cmd.client_tel, msg).catch(()=>{});
+      }
+
+      // Email client (si pas de tel ou en complément)
+      if (cmd.client_email) {
+        const html = `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px"><div style="background:${bot.couleur||'#00c875'};color:#fff;padding:24px;border-radius:12px 12px 0 0;text-align:center"><div style="font-size:40px">🛒</div><div style="font-size:20px;font-weight:800;margin-top:6px">Votre commande vous attend</div></div><div style="background:#fff;padding:24px;border-radius:0 0 12px 12px"><p>Bonjour${cmd.client_nom?' '+cmd.client_nom:''},</p><p>Vous aviez commencé une commande de <strong>${totalFmt} FCFA</strong> chez ${bot.nom} mais ne l'avez pas terminée.</p><p>Pas de souci, elle vous attend toujours !</p><a href="${CONFIG.BASE_URL}/chat/${cmd.bot_id}" style="display:inline-block;background:#00c875;color:#000;padding:14px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:10px">Terminer ma commande →</a></div></div>`;
+        sendEmail(cmd.client_email, `🛒 Votre commande chez ${bot.nom} vous attend`, html).catch(()=>{});
+      }
+
+      // Marquer comme relancée
+      await db.update('commandes', { relance_envoyee: true, relance_date: new Date().toISOString() }, `?id=eq.${cmd.id}`);
+    }
+  } catch(e) { console.error('abandonedCartReminders:', e.message); }
+}
+
+// 2️⃣ Rappel RDV J-1
+async function rdvReminders() {
+  try {
+    const tomorrow = new Date(Date.now() + 24*3600000);
+    const dateStr = tomorrow.toISOString().split('T')[0]; // YYYY-MM-DD
+    const rdvs = await db.select('rendez_vous', `?date=eq.${dateStr}&statut=eq.confirme&limit=200`);
+    if (!rdvs?.length) return;
+
+    for (const rdv of rdvs) {
+      if (rdv.rappel_envoye) continue;
+      const bots = await db.select('bots', `?id=eq.${rdv.bot_id}&select=nom,adresse`);
+      const bot = bots?.[0];
+      if (!bot) continue;
+
+      console.log(`📅 Rappel RDV J-1: ${bot.nom} ${rdv.heure} (${rdv.client_nom||'?'})`);
+
+      const heureFmt = rdv.heure || '';
+      const service = rdv.service || 'votre rendez-vous';
+
+      if (rdv.client_tel) {
+        const msg = `📅 *Rappel ${bot.nom}*\n\nN'oubliez pas! Vous avez ${service} *demain à ${heureFmt}*.\n${bot.adresse?`📍 ${bot.adresse}\n`:''}\nÀ demain! 🙏`;
+        sendWhatsApp(rdv.client_tel, msg).catch(()=>{});
+      }
+      if (rdv.client_email) {
+        const html = `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px"><h2 style="color:#00c875">📅 Rappel: votre rendez-vous demain</h2><p>Bonjour${rdv.client_nom?' '+rdv.client_nom:''},</p><p>Petit rappel: vous avez <strong>${service}</strong> chez <strong>${bot.nom}</strong> demain à <strong>${heureFmt}</strong>.</p>${bot.adresse?`<p>📍 ${bot.adresse}</p>`:''}<p>À demain!</p></div>`;
+        sendEmail(rdv.client_email, `📅 Rappel — Votre RDV demain à ${heureFmt}`, html).catch(()=>{});
+      }
+      await db.update('rendez_vous', { rappel_envoye: true }, `?id=eq.${rdv.id}`);
+    }
+  } catch(e) { console.error('rdvReminders:', e.message); }
+}
+
+// 3️⃣ Anniversaire client (table clients_birthdays optionnelle, ou via commandes avec date_naissance)
+async function birthdayReminders() {
+  try {
+    const today = new Date();
+    const monthDay = String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
+
+    // Cherche les clients dont c'est l'anniversaire (basé sur une éventuelle table clients)
+    // Cette fonction est best-effort: si la table n'existe pas, elle ne fait rien
+    let clients = [];
+    try {
+      // PostgREST: filter sur to_char(date_naissance, 'MM-DD') = monthDay
+      // Comme c'est complexe en REST, on fait simple: récupère tous les clients et filtre côté code
+      clients = await db.select('clients_birthdays', `?notif_envoyee_${today.getFullYear()}=is.null&limit=500`) || [];
+    } catch(e) { return; /* Table n'existe pas, pas grave */ }
+
+    for (const client of clients) {
+      if (!client.date_naissance) continue;
+      const bd = String(client.date_naissance).substring(5, 10); // MM-DD
+      if (bd !== monthDay) continue;
+
+      const bots = await db.select('bots', `?id=eq.${client.bot_id}&select=nom`);
+      const bot = bots?.[0];
+      if (!bot) continue;
+
+      console.log(`🎂 Anniversaire ${client.nom||'client'} (${bot.nom})`);
+
+      if (client.tel) {
+        const msg = `🎂 *Joyeux anniversaire${client.nom?' '+client.nom:''}!*\n\nToute l'équipe ${bot.nom} vous souhaite une belle journée!\n\n🎁 *Cadeau spécial*: profitez de -15% sur votre prochaine commande aujourd'hui avec le code *ANNIV15*\n\nÀ bientôt!`;
+        sendWhatsApp(client.tel, msg).catch(()=>{});
+      }
+      // Marquer comme envoyé pour cette année
+      const yearField = `notif_envoyee_${today.getFullYear()}`;
+      await db.update('clients_birthdays', { [yearField]: new Date().toISOString() }, `?id=eq.${client.id}`).catch(()=>{});
+    }
+  } catch(e) { console.error('birthdayReminders:', e.message); }
+}
+
+// Scheduler marketing: toutes les 30 min
+setInterval(runMarketingAutomations, 30 * 60 * 1000);
+// Et au démarrage (10s après pour laisser le serveur démarrer)
+setTimeout(runMarketingAutomations, 10000);
+
+// Endpoint admin pour déclencher manuellement
+app.post('/admin/marketing/run', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== ADMIN_SECRET && req.query.secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Non autorisé' });
+  }
+  runMarketingAutomations().catch(()=>{});
+  res.json({ success: true, message: 'Automations marketing déclenchées' });
+});
+
+// Endpoint pour ajouter un anniversaire client (best-effort, marche si table existe)
+app.post('/clients/:botId/birthday', async (req, res) => {
+  try {
+    const { nom, tel, email, date_naissance } = req.body;
+    if (!date_naissance) return res.status(400).json({ error: 'date_naissance requise (YYYY-MM-DD)' });
+    const data = { bot_id: req.params.botId, nom, tel, email, date_naissance };
+    Object.keys(data).forEach(k => data[k] == null && delete data[k]);
+    const out = await db.insert('clients_birthdays', data);
+    res.json({ success: true, client: out?.[0] });
+  } catch(e) { res.status(500).json({ error: e.message + ' (la table clients_birthdays existe-t-elle?)' }); }
+});
+
 // Endpoint pour déclencher manuellement le récap (admin)
 app.post('/admin/recap/:type', async (req, res) => {
   if (req.headers['x-admin-secret'] !== ADMIN_SECRET && req.query.secret !== ADMIN_SECRET) {
@@ -3305,6 +3454,11 @@ app.post('/bot/create', async (req, res) => {
     await db.insert('bots', botData);
     console.log(`✅ Bot créé: ${nom} (${id})`);
 
+    // 📧 Email de bienvenue au patron (async, ne bloque pas la réponse)
+    if (botData.notifications_email) {
+      sendWelcomeEmail(botData, id).catch(e => console.error('Welcome email:', e.message));
+    }
+
     const base = CONFIG.BASE_URL;
     res.json({
       success:true, botId:id,
@@ -3313,6 +3467,150 @@ app.post('/bot/create', async (req, res) => {
       widgetCode:`<!-- SamaBot — ${nom} -->\n<script>\n  window.SamaBotConfig = { botId: '${id}', couleur: '${couleur||'#00c875'}' };\n</script>\n<script src="${base}/widget.js" async></script>`
     });
   } catch(e) { console.error('Create:', e); res.status(500).json({ error:e.message }); }
+});
+
+// Email de bienvenue avec tutoriel 3 étapes
+async function sendWelcomeEmail(bot, botId) {
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
+  <div style="max-width:600px;margin:0 auto;background:#fff">
+    <div style="background:linear-gradient(135deg,${bot.couleur||'#00c875'} 0%,#0a1a0f 100%);padding:40px 24px;color:#fff;text-align:center">
+      <div style="font-size:50px;margin-bottom:10px">🎉</div>
+      <div style="font-size:26px;font-weight:800;margin-bottom:6px">Bienvenue sur SamaBot!</div>
+      <div style="font-size:14px;opacity:.9">Votre bot ${bot.emoji||'🤖'} <strong>${bot.nom}</strong> est prêt</div>
+    </div>
+    <div style="padding:32px 24px">
+      <p style="font-size:15px;color:#3a5040;line-height:1.6;margin:0 0 24px">
+        Asalaa maalekum 👋<br><br>
+        Félicitations! Votre assistant IA est en ligne et prêt à recevoir vos clients en wolof et en français.
+      </p>
+
+      <h2 style="font-size:18px;color:#0a1a0f;margin:0 0 16px">🚀 3 étapes pour bien démarrer</h2>
+
+      <div style="background:#f0fdf4;border-left:4px solid #00c875;border-radius:8px;padding:16px;margin-bottom:14px">
+        <div style="font-weight:700;color:#0a1a0f;margin-bottom:6px">1️⃣ Ajoutez votre catalogue</div>
+        <div style="font-size:13px;color:#5a7060;line-height:1.5">Allez dans l'onglet <strong>🛍️ Catalogue</strong> du dashboard et ajoutez vos produits/services avec photos. Plus c'est complet, mieux votre bot répondra.</div>
+      </div>
+
+      <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:8px;padding:16px;margin-bottom:14px">
+        <div style="font-weight:700;color:#0a1a0f;margin-bottom:6px">2️⃣ Personnalisez les notifications</div>
+        <div style="font-size:13px;color:#5a7060;line-height:1.5">Vérifiez votre numéro WhatsApp et email pour recevoir les commandes en temps réel. Section <strong>Paramètres</strong> du dashboard.</div>
+      </div>
+
+      <div style="background:#dbeafe;border-left:4px solid #3b82f6;border-radius:8px;padding:16px;margin-bottom:24px">
+        <div style="font-weight:700;color:#0a1a0f;margin-bottom:6px">3️⃣ Partagez votre lien</div>
+        <div style="font-size:13px;color:#5a7060;line-height:1.5">Votre lien de chat: <a href="${CONFIG.BASE_URL}/chat/${botId}" style="color:#00c875;text-decoration:none">${CONFIG.BASE_URL}/chat/${botId}</a><br>Partagez-le sur WhatsApp, Instagram, ou collez le widget sur votre site.</div>
+      </div>
+
+      <div style="text-align:center;margin:24px 0">
+        <a href="${CONFIG.BASE_URL}/dashboard/${botId}" style="display:inline-block;background:#00c875;color:#000;padding:14px 32px;border-radius:10px;text-decoration:none;font-weight:800;font-size:14px">📊 Ouvrir mon dashboard →</a>
+      </div>
+
+      <h3 style="font-size:15px;color:#0a1a0f;margin:24px 0 12px">💡 Astuces de démarrage</h3>
+      <ul style="font-size:13px;color:#5a7060;line-height:1.7;padding-left:20px;margin:0">
+        <li>Créez un code promo <strong>BIENVENUE10</strong> pour vos premiers clients (onglet 🎁 Promos)</li>
+        <li>Activez la livraison et configurez vos zones</li>
+        <li>Consultez l'onglet <strong>📊 Analytics</strong> chaque semaine pour voir vos performances</li>
+        <li>Répondez aux avis pour fidéliser vos clients</li>
+      </ul>
+
+      <div style="background:#f9faf9;border-radius:10px;padding:16px;margin-top:24px;text-align:center">
+        <div style="font-size:12px;color:#5a7060;margin-bottom:6px">Besoin d'aide?</div>
+        <div style="font-size:13px;color:#0a1a0f">Répondez à cet email ou contactez-nous sur WhatsApp</div>
+      </div>
+    </div>
+    <div style="padding:20px 24px;border-top:1px solid #f0f0f0;font-size:11px;color:#9ab0a0;text-align:center">
+      SamaBot IA — samabot.app · Votre assistant business 24/7
+    </div>
+  </div></body></html>`;
+  await sendEmail(bot.notifications_email, `🎉 Bienvenue sur SamaBot — ${bot.nom} est prêt!`, html);
+}
+
+// ============================================
+// TEMPLATES PAR NICHE — Catalogues pré-remplis
+// ============================================
+const NICHE_TEMPLATES = {
+  'restaurant': {
+    catalogue: [
+      {nom:'Thieboudienne', prix:3500, desc:'Riz au poisson, légumes', emoji:'🍛'},
+      {nom:'Yassa Poulet', prix:3000, desc:'Poulet à l\'oignon, citron', emoji:'🍗'},
+      {nom:'Mafé', prix:3000, desc:'Sauce arachide, viande', emoji:'🥘'},
+      {nom:'Salade', prix:2000, desc:'Salade composée fraîche', emoji:'🥗'},
+      {nom:'Bissap', prix:500, desc:'Jus de bissap maison', emoji:'🥤'}
+    ],
+    livraison_frais: 1000, livraison_delai: '30-45 min',
+    horaires: '11h-23h tous les jours'
+  },
+  'salon': {
+    catalogue: [
+      {nom:'Coupe simple', prix:3000, desc:'Coupe + mise en forme', emoji:'✂️'},
+      {nom:'Tresses', prix:8000, desc:'Tresses africaines', emoji:'💆‍♀️'},
+      {nom:'Soin cheveux', prix:5000, desc:'Soin profond + masque', emoji:'💇‍♀️'},
+      {nom:'Manucure', prix:3000, desc:'Pose + vernis', emoji:'💅'},
+      {nom:'Maquillage', prix:10000, desc:'Maquillage évènement', emoji:'💄'}
+    ],
+    livraison_actif: false,
+    horaires: '9h-19h du lundi au samedi'
+  },
+  'boutique': {
+    catalogue: [
+      {nom:'Article exemple', prix:5000, desc:'Description du produit', emoji:'🛍️'}
+    ],
+    livraison_frais: 1500, livraison_delai: '24-48h',
+    horaires: '9h-20h tous les jours'
+  },
+  'pharmacie': {
+    catalogue: [
+      {nom:'Paracétamol', prix:500, desc:'Antidouleur — boîte de 20', emoji:'💊'},
+      {nom:'Vitamine C', prix:2000, desc:'Cure d\'1 mois', emoji:'🌿'},
+      {nom:'Pansements', prix:1000, desc:'Boîte de 10', emoji:'🩹'}
+    ],
+    livraison_frais: 500, livraison_delai: '20-30 min',
+    horaires: '8h-22h, garde 24/7 sur appel'
+  },
+  'menuiserie': {
+    catalogue: [
+      {nom:'Devis personnalisé', prix:0, desc:'Sur mesure selon vos besoins', emoji:'🪚'},
+      {nom:'Réparation meuble', prix:5000, desc:'À partir de — selon dégâts', emoji:'🔨'}
+    ],
+    livraison_actif: false,
+    horaires: '8h-18h du lundi au samedi'
+  },
+  'auto-ecole': {
+    catalogue: [
+      {nom:'Forfait permis B', prix:150000, desc:'Code + 20h conduite', emoji:'🚗'},
+      {nom:'Heure de conduite', prix:8000, desc:'Cours individuel', emoji:'🚦'},
+      {nom:'Code seul', prix:50000, desc:'Cours + examen blanc', emoji:'📚'}
+    ],
+    livraison_actif: false,
+    horaires: '8h-19h du lundi au samedi'
+  }
+};
+
+// Endpoint pour récupérer les templates disponibles
+app.get('/templates', (req, res) => {
+  const templates = Object.entries(NICHE_TEMPLATES).map(([niche, data]) => ({
+    niche,
+    label: niche.charAt(0).toUpperCase() + niche.slice(1).replace('-', ' '),
+    catalogue_count: data.catalogue.length,
+    sample_items: data.catalogue.slice(0, 3).map(i => i.nom)
+  }));
+  res.json({ templates });
+});
+
+// Endpoint pour appliquer un template à un bot existant
+app.post('/templates/:botId/apply', async (req, res) => {
+  try {
+    const { niche } = req.body;
+    const tpl = NICHE_TEMPLATES[niche];
+    if (!tpl) return res.status(400).json({ error: 'Template introuvable' });
+    const updates = { catalogue: tpl.catalogue };
+    if (tpl.livraison_frais !== undefined) updates.livraison_frais = tpl.livraison_frais;
+    if (tpl.livraison_delai) updates.livraison_delai = tpl.livraison_delai;
+    if (tpl.livraison_actif !== undefined) updates.livraison_actif = tpl.livraison_actif;
+    if (tpl.horaires) updates.horaires = tpl.horaires;
+    await db.update('bots', updates, `?id=eq.${req.params.botId}`);
+    res.json({ success: true, applied: tpl.catalogue.length + ' articles' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================
@@ -6095,6 +6393,179 @@ app.get('/webhook', (req,res) => {
   if(req.query['hub.mode']==='subscribe'&&req.query['hub.verify_token']===CONFIG.META_VERIFY_TOKEN)
     res.status(200).send(req.query['hub.challenge']);
   else res.sendStatus(403);
+});
+
+// ============================================
+// MULTI-ÉTABLISSEMENTS (CHAÎNES)
+// Concept: un bot "parent" peut avoir plusieurs "succursales" (autres bots liés via parent_bot_id)
+// Routing GPS automatique: quand le client donne sa position, on trouve la succursale la plus proche
+// ============================================
+
+// Calcul distance Haversine entre 2 points GPS (km)
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Rayon terre en km
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Liste les succursales d'un bot parent
+app.get('/succursales/:parentBotId', async (req, res) => {
+  try {
+    const succursales = await db.select('bots', `?parent_bot_id=eq.${req.params.parentBotId}&actif=eq.true&order=created_at.asc`);
+    res.json(succursales || []);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Lier un bot existant comme succursale d'un parent
+app.post('/succursales/:parentBotId/link/:childBotId', async (req, res) => {
+  try {
+    const { lat, lng, zone_label } = req.body;
+    const updates = { parent_bot_id: req.params.parentBotId };
+    if (lat) updates.location_lat = parseFloat(lat);
+    if (lng) updates.location_lng = parseFloat(lng);
+    if (zone_label) updates.zone_label = zone_label;
+    await db.update('bots', updates, `?id=eq.${req.params.childBotId}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Délier une succursale
+app.delete('/succursales/:parentBotId/unlink/:childBotId', async (req, res) => {
+  try {
+    await db.update('bots', { parent_bot_id: null }, `?id=eq.${req.params.childBotId}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Trouve la succursale la plus proche d'un client donné
+app.post('/succursales/:parentBotId/nearest', async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (!lat || !lng) return res.status(400).json({ error: 'lat et lng requis' });
+    const succursales = await db.select('bots', `?parent_bot_id=eq.${req.params.parentBotId}&actif=eq.true`);
+    if (!succursales?.length) {
+      // Fallback: retourner le parent lui-même
+      const parents = await db.select('bots', `?id=eq.${req.params.parentBotId}`);
+      return res.json({ bot: parents?.[0] || null, distance_km: null, fallback: true });
+    }
+
+    const withDistance = succursales
+      .filter(s => s.location_lat != null && s.location_lng != null)
+      .map(s => ({
+        ...s,
+        distance_km: haversineKm(parseFloat(lat), parseFloat(lng), parseFloat(s.location_lat), parseFloat(s.location_lng))
+      }))
+      .sort((a, b) => a.distance_km - b.distance_km);
+
+    if (!withDistance.length) {
+      // Aucune succursale n'a de coordonnées GPS → retourne la première
+      return res.json({ bot: succursales[0], distance_km: null, fallback: true });
+    }
+
+    const nearest = withDistance[0];
+    res.json({
+      bot: { id: nearest.id, nom: nearest.nom, adresse: nearest.adresse, telephone: nearest.telephone, zone_label: nearest.zone_label },
+      distance_km: parseFloat(nearest.distance_km.toFixed(2)),
+      all_options: withDistance.slice(0, 5).map(s => ({
+        id: s.id, nom: s.nom, zone_label: s.zone_label, distance_km: parseFloat(s.distance_km.toFixed(2))
+      })),
+      fallback: false
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Page publique d'une chaîne — affiche toutes les succursales
+app.get('/chaine/:parentBotId', async (req, res) => {
+  try {
+    const parents = await db.select('bots', `?id=eq.${req.params.parentBotId}`);
+    const parent = parents?.[0];
+    if (!parent) return res.status(404).send('Chaîne introuvable');
+    const succursales = await db.select('bots', `?parent_bot_id=eq.${req.params.parentBotId}&actif=eq.true&order=zone_label.asc`);
+    const list = succursales || [];
+
+    res.send(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${parent.nom} — Nos établissements</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#f5f7f6;color:#0a1a0f;min-height:100vh}
+.hd{background:linear-gradient(135deg,${parent.couleur||'#00c875'},#0a1a0f);color:#fff;padding:30px 20px;text-align:center}
+.hd-emoji{font-size:50px;margin-bottom:10px}
+.hd-nm{font-size:22px;font-weight:800}
+.hd-sub{font-size:13px;opacity:.9;margin-top:4px}
+.wrap{max-width:600px;margin:0 auto;padding:20px}
+.geo-btn{background:#00c875;color:#000;border:none;border-radius:12px;padding:14px;width:100%;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:16px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px;display:block;text-decoration:none;color:#0a1a0f}
+.card-nm{font-size:16px;font-weight:700}
+.card-zone{display:inline-block;background:#f0fdf4;color:#166534;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-top:4px}
+.card-addr{font-size:12px;color:#5a7060;margin-top:6px}
+.card-dist{font-size:11px;color:#00c875;font-weight:700;margin-top:4px}
+.empty{text-align:center;color:#9ab0a0;padding:40px;font-size:13px}
+</style></head><body>
+<div class="hd">
+  <div class="hd-emoji">${parent.emoji||'🏢'}</div>
+  <div class="hd-nm">${parent.nom}</div>
+  <div class="hd-sub">${list.length} établissement${list.length>1?'s':''}</div>
+</div>
+<div class="wrap">
+  <button class="geo-btn" id="geo">📍 Trouver le plus proche</button>
+  <div id="list">
+    ${list.length ? list.map(s => `
+      <a href="/chat/${s.id}" class="card" data-lat="${s.location_lat||''}" data-lng="${s.location_lng||''}">
+        <div class="card-nm">${s.nom}</div>
+        ${s.zone_label?`<div class="card-zone">📍 ${s.zone_label}</div>`:''}
+        ${s.adresse?`<div class="card-addr">${s.adresse}</div>`:''}
+      </a>
+    `).join('') : '<div class="empty">Aucun établissement actif. Liez des succursales depuis votre dashboard.</div>'}
+  </div>
+</div>
+<script>
+document.getElementById('geo').onclick = function(){
+  if (!navigator.geolocation) { alert('Géolocalisation non supportée'); return; }
+  this.textContent = '⏳ Localisation...';
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+    try {
+      const r = await fetch('/succursales/${parent.id}/nearest', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat,lng})});
+      const d = await r.json();
+      if (d.bot) {
+        // Trier la liste avec distances
+        if (d.all_options && d.all_options.length) {
+          const cards = document.querySelectorAll('.card');
+          const sorted = d.all_options;
+          cards.forEach(c => {
+            const id = c.href.split('/chat/')[1];
+            const opt = sorted.find(o => o.id === id);
+            if (opt) {
+              if (!c.querySelector('.card-dist')) {
+                const div = document.createElement('div');
+                div.className = 'card-dist';
+                div.textContent = '📏 ' + opt.distance_km + ' km';
+                c.appendChild(div);
+              }
+            }
+          });
+          // Réordonner
+          const list = document.getElementById('list');
+          const ordered = sorted.map(o => Array.from(cards).find(c => c.href.endsWith('/chat/'+o.id))).filter(Boolean);
+          ordered.forEach(c => list.appendChild(c));
+        }
+        document.getElementById('geo').textContent = '✅ Plus proche: ' + d.bot.nom + (d.distance_km?' ('+d.distance_km+' km)':'');
+        document.getElementById('geo').style.background = '#fef3c7';
+      } else {
+        document.getElementById('geo').textContent = '❌ Aucun établissement trouvé';
+      }
+    } catch(e) { document.getElementById('geo').textContent = '❌ Erreur'; }
+  }, () => {
+    document.getElementById('geo').textContent = '❌ Permission refusée';
+  });
+};
+</script>
+</body></html>`);
+  } catch(e) { res.status(500).send('Erreur: '+e.message); }
 });
 
 // ============================================
