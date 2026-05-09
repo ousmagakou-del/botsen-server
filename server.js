@@ -463,6 +463,20 @@ app.post('/chat', async (req, res) => {
 
     saveMsg(botId, sid, message, reply).catch(()=>{});
 
+    // ✨ Si le message contient des infos client (email/tel/nom/adresse) ET qu'une commande pending existe,
+    // on met à jour les infos APRÈS un petit délai (pour que saveMsg ait fini)
+    const hasClientInfo = /@|7[05678]\d|\+\d{8,}|je m'appelle|je suis|mon nom|adresse|j'habite|livraison/i.test(message);
+    if (hasClientInfo) {
+      setTimeout(async () => {
+        try {
+          const pending = await db.select('commandes', `?bot_id=eq.${botId}&session_id=eq.${sid}&statut=eq.pending&order=created_at.desc&limit=1`);
+          if (pending?.[0]) {
+            updateCommandeInfos(pending[0].id, sid, botId).catch(()=>{});
+          }
+        } catch(e) {}
+      }, 800);
+    }
+
     res.json({ reply, actions, catalogue, intents });
   } catch(err) {
     console.error('Chat:', err);
@@ -1632,25 +1646,24 @@ async function sendWhatsApp(to, message) {
     let phone = to.replace(/[\s\-()]/g,'');
     if (!phone.startsWith('+')) phone = '+' + phone;
 
-    const payload = { to: phone, text: message };
-    // Ajoute le session_id si fourni (requis par certains providers WaSender)
-    if (CONFIG.WASENDER_SESSION_ID) {
-      payload.session_id = CONFIG.WASENDER_SESSION_ID;
-      payload.sessionId = CONFIG.WASENDER_SESSION_ID; // certains providers utilisent l'autre nom
-    }
-
+    // Format selon la doc officielle WaSender:
+    // POST /api/send-message + Authorization: Bearer KEY + body { to, text }
     const res = await fetch('https://www.wasenderapi.com/api/send-message', {
       method: 'POST',
       headers: {
         'Content-Type':'application/json',
-        'Authorization':`Bearer ${CONFIG.WASENDER_API_KEY}`,
-        ...(CONFIG.WASENDER_SESSION_ID ? { 'X-Session-Id': CONFIG.WASENDER_SESSION_ID } : {})
+        'Authorization':`Bearer ${CONFIG.WASENDER_API_KEY}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ to: phone, text: message })
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok) { console.log(`📱 WhatsApp envoyé à ${phone} ✅`); return true; }
-    else { console.error(`📱 WhatsApp erreur (${res.status}):`, JSON.stringify(data).substring(0,200)); return false; }
+    if (res.ok && data.success !== false) {
+      console.log(`📱 WhatsApp envoyé à ${phone} ✅ (msgId: ${data.data?.msgId||'?'})`);
+      return true;
+    } else {
+      console.error(`📱 WhatsApp erreur (${res.status}) → ${phone}:`, JSON.stringify(data).substring(0,300));
+      return false;
+    }
   } catch(e) { console.error('sendWhatsApp error:', e.message); return false; }
 }
 
@@ -1964,27 +1977,75 @@ async function updateCommandeInfos(commandeId, sessionId, botId) {
     const convs = await db.select('conversations', `?bot_id=eq.${botId}&session_id=eq.${sessionId}&select=id`);
     if (!convs?.length) return;
     const convId = convs[0].id;
-    const msgs = await db.select('messages', `?conversation_id=eq.${convId}&role=eq.user&order=created_at.desc&limit=10`);
+    const msgs = await db.select('messages', `?conversation_id=eq.${convId}&role=eq.user&order=created_at.desc&limit=15`);
     if (!msgs?.length) return;
 
     const fullText = msgs.map(m=>m.content).join(' ');
 
-    // Extrait téléphone (format sénégalais)
-    const telMatch = fullText.match(/(?:(\+221|00221)?[ ]?)?(?:7[05678][ ]?\d{3}[ ]?\d{2}[ ]?\d{2}|\d{9,10})/);
-    // Extrait adresse depuis les messages GPS
-    const adresseMatch = fullText.match(/Mon adresse de livraison est:\s*([^(]+)/i) ||
-                         fullText.match(/adresse[^:]*:\s*(.+?)(?:\.|GPS|$)/i);
-    // Extrait prénom (1-2 mots après "je suis" ou "c'est" ou "mon nom")
-    const nomMatch = fullText.match(/(?:je suis|c'est|mon (?:nom|prénom) (?:est)?)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
+    // Extrait email
+    const emailMatch = fullText.match(/[\w.+-]+@[\w-]+\.[\w-]+(?:\.[\w-]+)*/);
+    // Extrait téléphone (formats internationaux + sénégalais)
+    const telMatch = fullText.match(/\+\d{8,15}/) ||
+                     fullText.match(/(?:00\d{8,13})/) ||
+                     fullText.match(/\b7[05678][\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}\b/) ||
+                     fullText.match(/\b\d{9,10}\b/);
+    // Extrait adresse depuis les messages GPS ou texte
+    const adresseMatch = fullText.match(/(?:Mon adresse(?:\s+de livraison)?(?:\s+est)?\s*[:est]+\s*)([^(.\n]+)/i) ||
+                         fullText.match(/(?:adresse|j'habite|je suis (?:à|au)|livr(?:er|aison)\s+(?:à|au))\s*[:à]?\s*([^(.\n]{5,80})/i);
+    // Extrait prénom — patterns plus larges
+    const nomMatch = fullText.match(/(?:je m'appelle|je suis|c'est|mon (?:nom|prénom)(?:\s+est)?|moi c'est|prenom[:\s]+|nom[:\s]+)\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)?)/i);
 
     const updates = {};
-    if (telMatch) updates.client_tel = telMatch[0].replace(/\s/g,'');
-    if (adresseMatch) updates.adresse_livraison = adresseMatch[1].trim();
-    if (nomMatch) updates.client_nom = nomMatch[1].trim();
+    if (emailMatch) updates.client_email = emailMatch[0].toLowerCase();
+    if (telMatch) {
+      let tel = telMatch[0].replace(/[\s.-]/g,'');
+      // Si numéro sénégalais sans indicatif, ajouter +221
+      if (/^7[05678]\d{7}$/.test(tel)) tel = '+221' + tel;
+      else if (/^00/.test(tel)) tel = '+' + tel.substring(2);
+      else if (!tel.startsWith('+') && tel.length >= 9) tel = '+221' + tel.replace(/^221/,'');
+      updates.client_tel = tel;
+    }
+    if (adresseMatch) {
+      const addr = adresseMatch[1].trim().substring(0, 200);
+      // N'écrase pas une adresse GPS plus complète
+      if (addr.length > 4) updates.adresse_livraison = addr;
+    }
+    if (nomMatch) {
+      const nom = nomMatch[1].trim();
+      // Évite les faux positifs trop courts ou communs
+      if (nom.length > 1 && !/^(le|la|les|un|une|et|ou|de)$/i.test(nom)) {
+        updates.client_nom = nom;
+      }
+    }
 
     if (Object.keys(updates).length > 0) {
       await db.update('commandes', updates, `?id=eq.${commandeId}`);
-      console.log(`👤 Infos client mis à jour:`, updates);
+      console.log(`👤 Infos client mises à jour:`, updates);
+
+      // Re-notifie le patron avec les vraies infos client (WhatsApp seulement, pour éviter spam email)
+      try {
+        const cmds = await db.select('commandes', `?id=eq.${commandeId}`);
+        const cmd = cmds?.[0];
+        if (cmd) {
+          const bots = await db.select('bots', `?id=eq.${botId}&select=nom,notifications_phone,couleur,emoji`);
+          const bot = bots?.[0];
+          if (bot?.notifications_phone) {
+            const total = (cmd.total||0).toLocaleString('fr-FR');
+            const msg = `✅ *Commande complétée!*\n\n📦 *${cmd.numero}*\n💰 ${total} FCFA\n${cmd.client_nom?`👤 ${cmd.client_nom}\n`:''}${cmd.client_tel?`📞 ${cmd.client_tel}\n`:''}${cmd.adresse_livraison?`📍 ${cmd.adresse_livraison}\n`:''}\n👉 ${CONFIG.BASE_URL}/dashboard/${botId}`;
+            await sendWhatsApp(bot.notifications_phone, msg);
+          }
+          // Envoie confirmation au client (email + WhatsApp) si infos disponibles
+          if (cmd.client_email) {
+            sendConfirmationClient(botId, cmd, cmd.client_email).catch(()=>{});
+          }
+          if (cmd.client_tel) {
+            const bots2 = await db.select('bots', `?id=eq.${botId}&select=nom`);
+            const botNom = bots2?.[0]?.nom || 'Notre service';
+            const clientMsg = `✅ *${botNom}*\n\nVotre commande *${cmd.numero}* a bien été reçue!\n\n💰 Total: *${(cmd.total||0).toLocaleString('fr-FR')} FCFA*\n${cmd.adresse_livraison?`📍 Livraison: ${cmd.adresse_livraison}\n`:''}\nNous vous tiendrons informé(e) de l'avancement. Jërëjëf 🙏`;
+            sendWhatsApp(cmd.client_tel, clientMsg).catch(()=>{});
+          }
+        }
+      } catch(e2) { console.error('re-notify error:', e2.message); }
     }
   } catch(e) { console.error('updateCommandeInfos:', e.message); }
 }
