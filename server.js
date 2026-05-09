@@ -3653,6 +3653,7 @@ td code{background:#f0f4f1;padding:2px 6px;border-radius:3px;font-family:monospa
   <a href="#sdk">📦 SDK JavaScript</a>
   <a href="#examples">💡 Exemples concrets</a>
   <a href="#cors">🔒 Sécurité & CORS</a>
+  <a href="/api/docs/wordpress" style="color:#21759b;font-weight:700">📝 Guide WordPress dédié →</a>
 </div>
 
 <div class="section" id="integration">
@@ -3844,6 +3845,279 @@ function Catalogue() {
 
 </div>
 </body></html>`);
+});
+
+// 📚 Page doc dédiée WordPress
+app.get('/api/docs/wordpress', (req, res) => {
+  const base = CONFIG.BASE_URL;
+  res.send(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SamaBot pour WordPress — Guide d'intégration</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#f5f7f6;color:#0a1a0f;line-height:1.6}
+.hd{background:linear-gradient(135deg,#21759b,#0a1a0f);color:#fff;padding:50px 20px;text-align:center}
+.hd-logo{font-size:60px;margin-bottom:14px}
+.hd h1{font-size:32px;font-weight:800;margin-bottom:8px}
+.hd p{font-size:15px;opacity:.95}
+.hd-cta{display:inline-block;background:#00c875;color:#000;padding:14px 32px;border-radius:10px;text-decoration:none;font-weight:800;margin-top:20px;font-size:14px}
+.wrap{max-width:900px;margin:0 auto;padding:30px 20px}
+.section{background:#fff;border-radius:12px;padding:28px;margin-bottom:20px;border:1px solid #e5e7eb}
+.section h2{font-size:22px;font-weight:800;margin-bottom:14px;color:#0a1a0f;display:flex;align-items:center;gap:10px}
+.section h3{font-size:15px;color:#3a5040;text-transform:uppercase;letter-spacing:1px;margin:20px 0 10px}
+.section p{font-size:14px;color:#3a5040;margin-bottom:12px}
+.steps{counter-reset:step}
+.step{counter-increment:step;background:#f9faf9;border-radius:10px;padding:18px;margin-bottom:12px;display:flex;gap:14px;border-left:4px solid #00c875}
+.step::before{content:counter(step);background:#00c875;color:#000;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0;font-size:14px}
+.step-content{flex:1}
+.step-content strong{display:block;margin-bottom:4px;font-size:15px}
+.step-content p{margin:0;font-size:13px;color:#5a7060}
+.code{background:#0a1a0f;color:#a0e0c0;padding:14px;border-radius:8px;font-family:monospace;font-size:12px;overflow-x:auto;white-space:pre;line-height:1.5;margin:10px 0}
+.note{background:#fef3c7;border-left:3px solid #f59e0b;padding:12px 16px;border-radius:4px;font-size:13px;margin:12px 0;color:#92400e}
+.success{background:#f0fdf4;border-left:3px solid #00c875;padding:12px 16px;border-radius:4px;font-size:13px;margin:12px 0;color:#166534}
+.btn{display:inline-block;background:#00c875;color:#000;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px;margin:8px 4px}
+.btn-2{background:#21759b;color:#fff}
+.shortcode-card{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:18px;margin-bottom:14px}
+.shortcode-card h4{margin:0 0 8px;color:#166534}
+.shortcode-card code{background:#0a1a0f;color:#a0e0c0;padding:2px 8px;border-radius:4px;font-family:monospace;font-size:12px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+th{text-align:left;padding:10px;background:#f0f4f1;color:#3a5040;font-size:11px;text-transform:uppercase}
+td{padding:10px;border-top:1px solid #f0f4f1;color:#0a1a0f}
+.method-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:16px 0}
+.method-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:18px;text-align:center}
+.method-card-icon{font-size:36px;margin-bottom:8px}
+.method-card h4{margin:0 0 6px;font-size:15px}
+.method-card p{font-size:12px;color:#5a7060}
+.recommend{border-color:#00c875;background:#f0fdf4;position:relative}
+.recommend::before{content:'⭐ RECOMMANDÉ';position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:#00c875;color:#000;padding:3px 10px;border-radius:10px;font-size:10px;font-weight:800}
+</style></head><body>
+
+<div class="hd">
+  <div class="hd-logo">📝</div>
+  <h1>SamaBot pour WordPress</h1>
+  <p>Intégration en 2 minutes — sans code</p>
+  <a href="${base}/samabot-wp.zip" class="hd-cta">⬇️ Télécharger le plugin</a>
+</div>
+
+<div class="wrap">
+
+<div class="section">
+  <h2>🎯 3 méthodes d'intégration</h2>
+  <p>Choisissez la méthode qui vous convient :</p>
+
+  <div class="method-grid">
+    <div class="method-card recommend">
+      <div class="method-card-icon">🔌</div>
+      <h4>Plugin WordPress</h4>
+      <p>Installation 1-clic, page de réglages, shortcodes & blocs Gutenberg</p>
+    </div>
+    <div class="method-card">
+      <div class="method-card-icon">📋</div>
+      <h4>Code dans le footer</h4>
+      <p>Coller un script via "Insert Headers and Footers"</p>
+    </div>
+    <div class="method-card">
+      <div class="method-card-icon">📄</div>
+      <h4>Shortcode PHP</h4>
+      <p>Pour les développeurs (functions.php)</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>🚀 Méthode 1 — Plugin WordPress (recommandé)</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-content">
+        <strong>Téléchargez le plugin</strong>
+        <p>Cliquez sur le bouton ci-dessous pour récupérer le ZIP du plugin officiel SamaBot.</p>
+        <a href="${base}/samabot-wp.zip" class="btn">⬇️ Télécharger samabot-wp.zip</a>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Créez votre bot SamaBot</strong>
+        <p>Si vous n'avez pas encore de bot, créez-le gratuitement et notez votre <strong>Bot ID</strong>.</p>
+        <a href="${base}/setup" target="_blank" class="btn btn-2">Créer mon bot →</a>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Installez le plugin sur WordPress</strong>
+        <p>Dans WordPress: <strong>Extensions → Ajouter → Téléverser une extension</strong> → sélectionnez le ZIP → <strong>Installer</strong> → <strong>Activer</strong>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Configurez votre Bot ID</strong>
+        <p>Allez dans <strong>Réglages → SamaBot</strong>, collez votre Bot ID, choisissez votre couleur, et enregistrez.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>✅ C'est fait !</strong>
+        <p>La bulle de chat apparaît automatiquement sur tout votre site. Utilisez les shortcodes pour aller plus loin.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="success">
+    🎉 <strong>Total : ~2 minutes</strong>. Votre site WordPress est maintenant connecté à SamaBot.
+  </div>
+</div>
+
+<div class="section">
+  <h2>🧱 Shortcodes disponibles</h2>
+  <p>Une fois le plugin installé, utilisez ces shortcodes dans n'importe quelle page ou article WordPress :</p>
+
+  <div class="shortcode-card">
+    <h4>🛍️ Catalogue produits</h4>
+    <code>[samabot_catalogue limit="8"]</code>
+    <p style="margin-top:8px;font-size:13px;color:#5a7060">Affiche vos produits avec photo, prix et bouton "Commander". Idéal pour pages "Menu", "Boutique", "Services".</p>
+  </div>
+
+  <div class="shortcode-card">
+    <h4>💬 Bouton "Discuter"</h4>
+    <code>[samabot_chat texte="Discuter sur WhatsApp"]</code>
+    <p style="margin-top:8px;font-size:13px;color:#5a7060">Bouton CTA qui ouvre le chat. Personnalisez le texte.</p>
+  </div>
+
+  <div class="shortcode-card">
+    <h4>⭐ Avis clients</h4>
+    <code>[samabot_avis limit="5"]</code>
+    <p style="margin-top:8px;font-size:13px;color:#5a7060">Affiche les avis avec note moyenne. Excellent pour social proof.</p>
+  </div>
+
+  <div class="shortcode-card">
+    <h4>📊 Note moyenne (badge)</h4>
+    <code>[samabot_rating]</code>
+    <p style="margin-top:8px;font-size:13px;color:#5a7060">Petit badge "⭐ 4.5 (28 avis)" à mettre dans le header ou footer.</p>
+  </div>
+
+  <div class="shortcode-card">
+    <h4>🖼️ Chat intégré (iframe)</h4>
+    <code>[samabot_chat_embed height="600"]</code>
+    <p style="margin-top:8px;font-size:13px;color:#5a7060">Intègre le chat complet dans une page (idéal pour page "Contact").</p>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📋 Méthode 2 — Code manuel (sans plugin)</h2>
+  <p>Si vous préférez ne pas installer le plugin :</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-content">
+        <strong>Installez "Insert Headers and Footers"</strong>
+        <p>Dans WordPress: <strong>Extensions → Ajouter → Cherchez "Insert Headers and Footers"</strong> (par WPBeginner) → Installer + Activer.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Allez dans Réglages → Insert Headers and Footers</strong>
+        <p>Trouvez la section "Scripts in Footer".</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Collez ce code (remplacez VOTRE_BOT_ID)</strong>
+        <div class="code">&lt;script&gt;
+  window.SamaBotConfig = { botId: 'VOTRE_BOT_ID', couleur: '#00c875' };
+&lt;/script&gt;
+&lt;script src="${base}/widget.js" async&gt;&lt;/script&gt;</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-content">
+        <strong>Save → C'est fait !</strong>
+        <p>La bulle apparaît sur tout le site.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📄 Méthode 3 — Shortcode PHP custom (développeurs)</h2>
+  <p>Pour les développeurs qui veulent intégrer dans <code>functions.php</code> sans plugin :</p>
+
+  <div class="code">// Dans functions.php du thème enfant
+function mon_catalogue_samabot() {
+    $bot_id = 'VOTRE_BOT_ID';
+    $url = 'https://api.samabot.app/api/v1/bots/' . $bot_id . '/catalogue';
+    $response = wp_remote_get($url, ['timeout' => 5]);
+    if (is_wp_error($response)) return '';
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (empty($data['catalogue'])) return '';
+
+    $html = '&lt;div class="catalogue"&gt;';
+    foreach ($data['catalogue'] as $p) {
+        $html .= '&lt;div&gt;&lt;h3&gt;' . esc_html($p['nom']) . '&lt;/h3&gt;';
+        $html .= '&lt;p&gt;' . number_format($p['prix']) . ' FCFA&lt;/p&gt;&lt;/div&gt;';
+    }
+    return $html . '&lt;/div&gt;';
+}
+add_shortcode('mon_catalogue', 'mon_catalogue_samabot');
+
+// Usage dans une page: [mon_catalogue]</div>
+</div>
+
+<div class="section">
+  <h2>🛠️ Compatibilité</h2>
+  <table>
+    <thead><tr><th>Plateforme</th><th>Support</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>WordPress 5.8+</td><td>✅ Oui</td><td>Plugin officiel</td></tr>
+      <tr><td>WooCommerce</td><td>✅ Oui</td><td>Shortcode <code>[samabot_chat]</code> sur fiches produit</td></tr>
+      <tr><td>Elementor</td><td>✅ Oui</td><td>Widget HTML + shortcode</td></tr>
+      <tr><td>Divi</td><td>✅ Oui</td><td>Module Code + shortcode</td></tr>
+      <tr><td>Beaver Builder</td><td>✅ Oui</td><td>Module HTML + shortcode</td></tr>
+      <tr><td>Gutenberg</td><td>✅ Oui</td><td>3 blocs natifs (Catalogue, Avis, Chat)</td></tr>
+      <tr><td>Multilangue (WPML/Polylang)</td><td>✅ Oui</td><td>Le bot répond en wolof + français automatiquement</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>❓ FAQ</h2>
+
+  <h3>Le plugin ralentit-il mon site ?</h3>
+  <p>Non. Le widget se charge en mode <code>async</code> (n'empêche pas l'affichage de la page) et le catalogue est mis en cache 5-10 min.</p>
+
+  <h3>Compatible avec tous les thèmes ?</h3>
+  <p>Oui. Le plugin s'injecte via <code>wp_footer</code>, qui fonctionne avec 99% des thèmes.</p>
+
+  <h3>Je peux personnaliser le design ?</h3>
+  <p>Oui : couleur dans les réglages, et CSS custom via <code>.samabot-catalogue</code>, <code>.samabot-avis</code>, etc.</p>
+
+  <h3>Le widget marche sur mobile ?</h3>
+  <p>Parfaitement. Il s'adapte automatiquement aux petits écrans.</p>
+
+  <h3>Je peux désactiver la bulle sur certaines pages ?</h3>
+  <p>Oui. Dans les réglages, ajoutez les slugs des pages à exclure (ex: <code>checkout, mon-compte</code>).</p>
+</div>
+
+<div style="text-align:center;color:#9ab0a0;font-size:13px;padding:30px 0">
+  <strong>Besoin d'aide ?</strong><br>
+  <a href="${base}/api/docs" style="color:#00c875">Documentation API complète</a> ·
+  <a href="mailto:gakououssou@gmail.com" style="color:#00c875">Nous contacter</a>
+</div>
+
+</div>
+</body></html>`);
+});
+
+// Servir le ZIP du plugin WordPress
+app.get('/samabot-wp.zip', (req, res) => {
+  const path = require('path');
+  const fs = require('fs');
+  const zipPath = path.join(__dirname, 'samabot-wp.zip');
+  if (fs.existsSync(zipPath)) {
+    res.download(zipPath, 'samabot-wp.zip');
+  } else {
+    // Fallback: redirect vers le ZIP hébergé (à uploader sur ton serveur Render)
+    res.status(404).send('Plugin ZIP introuvable. Téléchargez-le depuis votre dashboard SamaBot.');
+  }
 });
 
 // 📦 SDK JavaScript SamaBot — pour intégration ultra simple
