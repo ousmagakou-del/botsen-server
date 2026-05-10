@@ -704,6 +704,15 @@ app.post('/chat', async (req, res) => {
       if (orderIdx > -1) intents.splice(orderIdx, 1);
     }
 
+    // 📸 v10.9: Détecte si le BOT présente le catalogue/menu dans sa réponse
+    // → affiche les cards photos en bas
+    if (/voici\s+(nos|notre|les|le)\s+(catalogue|menu|produits|articles|prestations|services)|notre\s+catalogue|nos\s+(produits|articles|menus?|prestations)|^[\s\S]*-\s+[A-ZÉÀ].*\d.*FCFA/im.test(reply)) {
+      if (!intents.includes('catalogue')) {
+        intents.push('catalogue');
+        console.log(`📸 Bot présente catalogue → cards photos affichées`);
+      }
+    }
+
     // Extrait le total — supporte: "Total: 5 000 FCFA" "Total : 5000 FCFA." "5 000 FCFA"
     let orderTotal = 0;
     const totalMatch = reply.match(/total\s*[:\-]\s*\*?\s*([0-9][0-9\s]*)\s*\*?\s*f?cfa/i) ||
@@ -819,7 +828,31 @@ app.post('/chat', async (req, res) => {
     }
 
     const actions = buildActions(intents, bot, orderTotal, 'CMD-'+Date.now().toString(36).toUpperCase());
-    const catalogue = (intents.includes('catalogue') && bot.catalogue?.length) ? bot.catalogue.slice(0,8) : null;
+    
+    // 📸 v10.9: Catalogue avec photos depuis la table produits (priorité) + fallback bot.catalogue
+    let catalogue = null;
+    if (intents.includes('catalogue')) {
+      try {
+        // Priorité 1: produits avec photos depuis la table produits
+        const produits = await db.select('produits', `?bot_id=eq.${botId}&actif=eq.true&visible=eq.true&order=created_at.desc&limit=8`);
+        if (produits && produits.length > 0) {
+          catalogue = produits.map(p => ({
+            nom: p.nom,
+            prix: p.prix || 0,
+            desc: p.desc || null,
+            image: p.photo || null,  // photo uploadée depuis dashboard
+            emoji: p.emoji || bot.emoji || '🛍️'
+          }));
+          console.log(`📸 Catalogue avec photos: ${catalogue.length} produits (table produits)`);
+        } else if (bot.catalogue?.length) {
+          // Priorité 2: fallback sur bot.catalogue (ancien format JSONB)
+          catalogue = bot.catalogue.slice(0,8);
+        }
+      } catch(e) {
+        // En cas d'erreur, fallback sur bot.catalogue
+        catalogue = bot.catalogue?.length ? bot.catalogue.slice(0,8) : null;
+      }
+    }
 
     saveMsg(botId, sid, message, reply).catch(()=>{});
 
@@ -7204,19 +7237,20 @@ body{font-family:-apple-system,'DM Sans',sans-serif;background:#f0f4f1;display:f
 .address-input{flex:1;border:1.5px solid #d1d5db;border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none}
 .address-input:focus{border-color:#0369a1}
 .address-send{background:#0369a1;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
-.catalogue{display:flex;gap:10px;padding:10px 12px;overflow-x:auto;scrollbar-width:none;border-top:1px solid #e5e7eb;background:#fafafa}
+.catalogue{display:flex;gap:12px;padding:12px;overflow-x:auto;scrollbar-width:none;border-top:1px solid #e5e7eb;background:linear-gradient(to bottom,#fafafa,#f5f5f5)}
 .catalogue::-webkit-scrollbar{display:none}
-.cat-card{min-width:130px;max-width:130px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;cursor:pointer;flex-shrink:0;overflow:hidden;transition:all .15s;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.cat-card{min-width:160px;max-width:160px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;cursor:pointer;flex-shrink:0;overflow:hidden;transition:all .2s;box-shadow:0 2px 8px rgba(0,0,0,.06);display:flex;flex-direction:column}
 .cat-card:active{transform:scale(.97);border-color:${bot.couleur}}
-.cat-card:hover{border-color:${bot.couleur}55;box-shadow:0 4px 12px rgba(0,0,0,.1)}
-.cat-img{width:100%;height:80px;object-fit:cover;display:block;background:#f0f4f1}
-.cat-img-placeholder{width:100%;height:80px;background:linear-gradient(135deg,${bot.couleur}22,${bot.couleur}44);display:flex;align-items:center;justify-content:center;font-size:32px}
-.cat-body{padding:8px}
-.cat-nom{font-size:12px;font-weight:700;color:#111;display:block;line-height:1.3;margin-bottom:3px}
-.cat-desc-small{font-size:10px;color:#9ab0a0;display:block;margin-bottom:5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.cat-footer{display:flex;align-items:center;justify-content:space-between}
-.cat-prix{font-size:13px;font-weight:800;color:${bot.couleur}}
-.cat-add{width:22px;height:22px;border-radius:50%;background:${bot.couleur};border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700}
+.cat-card:hover{border-color:${bot.couleur}55;box-shadow:0 6px 20px rgba(0,0,0,.12);transform:translateY(-2px)}
+.cat-img{width:100%;height:120px;object-fit:cover;display:block;background:#f0f4f1}
+.cat-img-placeholder{width:100%;height:120px;background:linear-gradient(135deg,${bot.couleur}22,${bot.couleur}44);display:flex;align-items:center;justify-content:center;font-size:48px}
+.cat-body{padding:10px 12px;display:flex;flex-direction:column;flex:1}
+.cat-nom{font-size:13px;font-weight:700;color:#111;display:block;line-height:1.3;margin-bottom:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:34px}
+.cat-desc-small{font-size:11px;color:#9ab0a0;display:block;margin-bottom:6px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.cat-footer{display:flex;align-items:center;justify-content:space-between;margin-top:auto;gap:6px}
+.cat-prix{font-size:14px;font-weight:800;color:${bot.couleur};white-space:nowrap}
+.cat-add{width:28px;height:28px;border-radius:50%;background:${bot.couleur};border:none;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;box-shadow:0 2px 6px ${bot.couleur}55;transition:transform .15s;flex-shrink:0}
+.cat-add:hover{transform:scale(1.1)}
 .rating-stars{display:flex;justify-content:center;gap:8px;padding:8px;border-top:1px solid #e5e7eb}
 .star-btn{font-size:26px;background:none;border:none;cursor:pointer}
 .qr{padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;background:#fff;border-top:1px solid #e5e7eb;flex-shrink:0}
