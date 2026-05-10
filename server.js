@@ -10073,6 +10073,897 @@ app.post('/chat/v2', async (req, res) => {
 // FIN BLOC v10.5 ────────────────────────────────────────────
 
 
+// ════════════════════════════════════════════════════════════
+// ONBOARDING V2 — ADAPTATIF INTELLIGENT (v10.6)
+// L'ancien /onboarding reste intact (rétrocompat)
+// /onboarding-v2 pose des questions SPÉCIFIQUES selon la niche
+// Chaque niche a son template de questions + skills + quick replies
+// ════════════════════════════════════════════════════════════
+
+// ─── TEMPLATES PAR NICHE ──────────────────────────────────────
+// Chaque template définit :
+// 1. Les questions spécifiques au métier (étape 3 du wizard)
+// 2. Les skills v10.5 à activer automatiquement
+// 3. Les quick replies du bot adaptés au métier
+// 4. Le prompt système métier
+// 5. Le format du catalogue/services
+
+const NICHE_TEMPLATES_V2 = {
+
+  boutique: {
+    icon: '🛒',
+    label: 'Boutique / Vente',
+    description: 'Vêtements, accessoires, produits divers',
+    color: '#8b5cf6',
+    skills: ['commerce', 'urgence'],
+    catalogue_label: 'Produits',
+    catalogue_singular: 'produit',
+    placeholder_item: 'Ex: T-shirt blanc taille M',
+    placeholder_price: 'Prix en FCFA (ex: 5000)',
+    questions: [
+      { key: 'type_produits', label: 'Type de produits vendus', placeholder: 'Ex: Vêtements, électronique, alimentaire', required: true },
+      { key: 'livraison_actif', label: 'Tu fais la livraison ?', type: 'boolean', required: true },
+      { key: 'livraison_zones', label: 'Zones de livraison (si oui)', placeholder: 'Ex: Dakar, Pikine, Guédiawaye', required: false },
+      { key: 'livraison_frais', label: 'Frais de livraison (FCFA)', type: 'number', placeholder: '1000', required: false },
+      { key: 'paiement_modes', label: 'Moyens de paiement acceptés', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Free Money', 'Carte bancaire'], required: true }
+    ],
+    quick_replies: ['🛍️ Voir produits', '📦 Commander', '🚚 Livraison', '📍 Adresse', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'une BOUTIQUE qui vend des produits.
+RÈGLES:
+- Quand le client dit bonjour/asalaa, présente brièvement et propose: voir produits, commander, livraison
+- Si le client demande "vos produits" ou "catalogue", liste les produits avec photos et prix
+- Pour une commande: produit choisi → quantité → infos client (prénom, tél, adresse) → récap → confirmation → paiement
+- Ne demande JAMAIS l'email sauf si vraiment nécessaire (1 fois max)
+- Si infos client déjà données dans le message, ne re-demande pas (analyse le message)
+- Confirme toujours par un récapitulatif AVANT le paiement
+- Pour la livraison, mentionne les frais et le délai
+- Termine toujours par un "Jërëjëf" chaleureux`
+  },
+
+  restaurant: {
+    icon: '🍽️',
+    label: 'Restaurant / Traiteur',
+    description: 'Plats, livraison de repas',
+    color: '#f59e0b',
+    skills: ['commerce', 'urgence'],
+    catalogue_label: 'Menu',
+    catalogue_singular: 'plat',
+    placeholder_item: 'Ex: Thiéboudiène complet',
+    placeholder_price: 'Prix en FCFA (ex: 3500)',
+    questions: [
+      { key: 'type_cuisine', label: 'Type de cuisine', placeholder: 'Ex: Sénégalaise, Fast-food, Internationale', required: true },
+      { key: 'livraison_actif', label: 'Tu fais la livraison ?', type: 'boolean', required: true },
+      { key: 'livraison_zones', label: 'Zones de livraison (si oui)', placeholder: 'Ex: Dakar, Almadies', required: false },
+      { key: 'livraison_frais', label: 'Frais de livraison (FCFA)', type: 'number', placeholder: '1000', required: false },
+      { key: 'livraison_delai', label: 'Délai de livraison', placeholder: '30-45 min', required: false },
+      { key: 'horaires_service', label: 'Horaires du service', placeholder: 'Ex: 11h-23h tous les jours', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'À la livraison'], required: true }
+    ],
+    quick_replies: ['🍽️ Menu', '📦 Commander', '🚚 Livraison', '🕐 Horaires', '📍 Adresse'],
+    prompt_metier: `Tu es l'assistant d'un RESTAURANT.
+RÈGLES:
+- Quand client dit bonjour, propose: voir menu, commander, infos livraison
+- Pour le menu, liste les plats avec photos et prix de manière appétissante
+- Pour une commande: plat → quantité → infos client → récap → confirmation → paiement
+- Mentionne le délai de livraison estimé
+- Ne demande JAMAIS l'email sauf si nécessaire
+- Si infos déjà données, ne re-demande pas
+- Confirme toujours par récap AVANT paiement
+- Termine par "Jërëjëf, à très vite !"`
+  },
+
+  salon_coiffure: {
+    icon: '💇',
+    label: 'Salon de coiffure / Beauté',
+    description: 'Coiffure, manucure, soins esthétiques',
+    color: '#ec4899',
+    skills: ['rdv', 'urgence'],
+    catalogue_label: 'Prestations',
+    catalogue_singular: 'prestation',
+    placeholder_item: 'Ex: Tresses africaines',
+    placeholder_price: 'Prix en FCFA (ex: 15000)',
+    questions: [
+      { key: 'type_prestations', label: 'Types de prestations', placeholder: 'Ex: Coiffure, manucure, maquillage', required: true },
+      { key: 'duree_moyenne', label: 'Durée moyenne d\'une prestation (en min)', type: 'number', placeholder: '60', required: true },
+      { key: 'horaires_ouverture', label: 'Horaires d\'ouverture', placeholder: 'Ex: 9h-19h Lun-Sam', required: true },
+      { key: 'jours_ouverts', label: 'Jours d\'ouverture', type: 'multi', options: ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'], required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces'], required: true }
+    ],
+    quick_replies: ['💇 Prestations', '📅 Prendre RDV', '💰 Tarifs', '📍 Adresse', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'un SALON DE COIFFURE / BEAUTÉ.
+RÈGLES:
+- Quand client dit bonjour, propose: voir prestations, prendre RDV, tarifs
+- Pour les prestations, liste avec prix et durée
+- Pour un RDV: prestation choisie → date/heure souhaitée → vérification disponibilité → confirmation
+- Demande infos client (prénom, tél) pour confirmer le RDV
+- Ne demande PAS l'email
+- Mentionne la durée estimée de la prestation
+- Confirme par récap clair avec date/heure exactes
+- Termine par "Jërëjëf, à bientôt au salon !"`
+  },
+
+  pharmacie: {
+    icon: '💊',
+    label: 'Pharmacie / Parapharmacie',
+    description: 'Médicaments, produits de santé',
+    color: '#10b981',
+    skills: ['sante', 'commerce', 'urgence'],
+    catalogue_label: 'Produits',
+    catalogue_singular: 'produit',
+    placeholder_item: 'Ex: Doliprane 500mg',
+    placeholder_price: 'Prix en FCFA (ex: 2500)',
+    questions: [
+      { key: 'pharmacie_garde', label: 'Tu fais la garde de nuit ?', type: 'boolean', required: true },
+      { key: 'horaires_normaux', label: 'Horaires normaux', placeholder: 'Ex: 8h-22h', required: true },
+      { key: 'horaires_garde', label: 'Horaires de garde (si applicable)', placeholder: 'Ex: 22h-8h', required: false },
+      { key: 'livraison_actif', label: 'Tu livres les médicaments ?', type: 'boolean', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Mutuelle'], required: true }
+    ],
+    quick_replies: ['💊 Disponibilité', '🚨 Garde', '🚚 Livraison', '🕐 Horaires', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'une PHARMACIE.
+RÈGLES CRITIQUES SANTÉ:
+- Tu ne donnes JAMAIS de conseil médical, de diagnostic, ni de prescription
+- Si le client décrit des symptômes, redirige IMMÉDIATEMENT vers le pharmacien ou un médecin
+- Tu peux: confirmer la disponibilité d'un médicament, donner les horaires, expliquer comment commander
+- En cas d'URGENCE médicale: redirige IMMÉDIATEMENT vers le SAMU 1515 ou les urgences
+- Pour livraison médicaments: vérifie ordonnance requise
+- Reste professionnel et bienveillant
+- Termine par "Bonne santé, jërëjëf !"`
+  },
+
+  auto_ecole: {
+    icon: '🚗',
+    label: 'Auto-école',
+    description: 'Permis de conduire, code, conduite',
+    color: '#3b82f6',
+    skills: ['rdv', 'education', 'urgence'],
+    catalogue_label: 'Forfaits',
+    catalogue_singular: 'forfait',
+    placeholder_item: 'Ex: Forfait Code + 20h conduite',
+    placeholder_price: 'Prix en FCFA (ex: 150000)',
+    questions: [
+      { key: 'permis_proposes', label: 'Permis proposés', type: 'multi', options: ['B (voiture)', 'A (moto)', 'C (camion)', 'D (bus)'], required: true },
+      { key: 'horaires_cours', label: 'Horaires des cours', placeholder: 'Ex: 9h-18h Lun-Sam', required: true },
+      { key: 'documents_requis', label: 'Documents requis pour inscription', placeholder: 'Ex: CNI, 4 photos, certificat médical', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Paiement en plusieurs fois'], required: true }
+    ],
+    quick_replies: ['🚗 Forfaits', '📝 S\'inscrire', '📅 RDV', '📋 Documents', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'une AUTO-ÉCOLE.
+RÈGLES:
+- Quand client dit bonjour, propose: voir forfaits, s'inscrire, prendre RDV info
+- Pour les forfaits, explique ce qui est inclus (code, heures de conduite)
+- Pour une inscription: présente les documents requis, propose RDV pour finaliser
+- Pour un RDV: type (info / inscription / cours) → date/heure → confirmation
+- Mentionne les horaires de cours et la durée moyenne pour obtenir le permis
+- Ne demande PAS l'email systématiquement
+- Termine par "Bonne route, jërëjëf !"`
+  },
+
+  clinique_medicale: {
+    icon: '🏥',
+    label: 'Clinique / Cabinet médical',
+    description: 'Consultations, RDV médecins',
+    color: '#06b6d4',
+    skills: ['rdv', 'sante', 'urgence'],
+    catalogue_label: 'Spécialités',
+    catalogue_singular: 'spécialité',
+    placeholder_item: 'Ex: Médecine générale',
+    placeholder_price: 'Prix consultation en FCFA (ex: 15000)',
+    questions: [
+      { key: 'specialites', label: 'Spécialités proposées', placeholder: 'Ex: Médecine générale, Cardiologie, Pédiatrie', required: true },
+      { key: 'horaires_consultation', label: 'Horaires de consultation', placeholder: 'Ex: 8h-18h Lun-Sam', required: true },
+      { key: 'urgences_actif', label: 'Service d\'urgences ?', type: 'boolean', required: true },
+      { key: 'mutuelles_acceptees', label: 'Mutuelles acceptées', placeholder: 'Ex: IPRES, IPM, Atlanta', required: false },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Mutuelle', 'Carte'], required: true }
+    ],
+    quick_replies: ['🏥 Spécialités', '📅 Prendre RDV', '🚨 Urgences', '🕐 Horaires', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'une CLINIQUE / CABINET MÉDICAL.
+RÈGLES CRITIQUES SANTÉ:
+- Tu ne donnes JAMAIS de diagnostic, de traitement, ni de conseil médical
+- Si le patient décrit des symptômes graves, redirige IMMÉDIATEMENT vers urgences (1515 SAMU)
+- Tu peux: prendre RDV, expliquer les spécialités, donner les horaires
+- Pour un RDV: spécialité → motif court → date/heure → confirmation
+- Demande infos patient (nom, tél, motif court) pour le RDV
+- Reste empathique et professionnel
+- Confidentialité ABSOLUE des informations patient
+- Termine par "Bonne santé, jërëjëf !"`
+  },
+
+  hotel: {
+    icon: '🏨',
+    label: 'Hôtel / Hébergement',
+    description: 'Réservation chambres, services',
+    color: '#0ea5e9',
+    skills: ['rdv', 'commerce', 'urgence'],
+    catalogue_label: 'Chambres',
+    catalogue_singular: 'chambre',
+    placeholder_item: 'Ex: Chambre Standard',
+    placeholder_price: 'Prix par nuit en FCFA (ex: 35000)',
+    questions: [
+      { key: 'types_chambres', label: 'Types de chambres', placeholder: 'Ex: Standard, Deluxe, Suite', required: true },
+      { key: 'services_inclus', label: 'Services inclus', placeholder: 'Ex: Petit-déj, Wifi, Piscine, Parking', required: true },
+      { key: 'check_in_out', label: 'Heures check-in/check-out', placeholder: 'Ex: Check-in 14h, Check-out 12h', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Carte bancaire', 'Virement', 'Espèces'], required: true }
+    ],
+    quick_replies: ['🏨 Chambres', '📅 Réserver', '💰 Tarifs', '🍳 Services', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'un HÔTEL.
+RÈGLES:
+- Quand client dit bonjour, propose: voir chambres, réserver, services
+- Pour les chambres, liste types avec prix par nuit et capacité
+- Pour une réservation: dates (arrivée + départ) → type chambre → nb personnes → infos client → confirmation
+- Mentionne les services inclus et heures check-in/check-out
+- Demande nom complet, tél, et email (pour la réservation officielle)
+- Confirme par récap clair avec dates précises et total
+- Termine par "Au plaisir de vous accueillir, jërëjëf !"`
+  },
+
+  taxi_transport: {
+    icon: '🚕',
+    label: 'Taxi / Transport',
+    description: 'Réservation courses, livraison',
+    color: '#eab308',
+    skills: ['rdv', 'urgence'],
+    catalogue_label: 'Tarifs',
+    catalogue_singular: 'course',
+    placeholder_item: 'Ex: Course Dakar Centre',
+    placeholder_price: 'Prix en FCFA (ex: 2500)',
+    questions: [
+      { key: 'zones_couverture', label: 'Zones couvertes', placeholder: 'Ex: Dakar, Pikine, Rufisque', required: true },
+      { key: 'disponibilite', label: 'Disponibilité', placeholder: 'Ex: 24/7 ou 6h-22h', required: true },
+      { key: 'type_vehicules', label: 'Types de véhicules', placeholder: 'Ex: Berline, 4x4, Mini-bus', required: false },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces'], required: true }
+    ],
+    quick_replies: ['🚕 Réserver', '💰 Tarifs', '📍 Zones', '🕐 Disponibilité', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'un service de TAXI / TRANSPORT.
+RÈGLES:
+- Quand client dit bonjour, propose: réserver une course, voir tarifs, infos zones
+- Pour une réservation: lieu de prise en charge → destination → date/heure → nb passagers → confirmation
+- Demande infos client (nom, tél) pour la course
+- Estime le tarif selon les zones couvertes
+- Confirme par récap avec adresse précise et heure
+- Mentionne le type de véhicule disponible
+- Termine par "Bonne route, jërëjëf !"`
+  },
+
+  service_pro: {
+    icon: '🔧',
+    label: 'Service / Artisan',
+    description: 'Plombier, électricien, menuisier, etc.',
+    color: '#a16207',
+    skills: ['rdv', 'urgence'],
+    catalogue_label: 'Prestations',
+    catalogue_singular: 'prestation',
+    placeholder_item: 'Ex: Réparation plomberie',
+    placeholder_price: 'Prix de base en FCFA (ex: 5000) ou "Sur devis"',
+    questions: [
+      { key: 'type_service', label: 'Type de service', placeholder: 'Ex: Plomberie, Électricité, Menuiserie', required: true },
+      { key: 'zones_intervention', label: 'Zones d\'intervention', placeholder: 'Ex: Dakar et banlieue', required: true },
+      { key: 'urgences', label: 'Tu interviens en urgence ?', type: 'boolean', required: true },
+      { key: 'devis_gratuit', label: 'Devis gratuit ?', type: 'boolean', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Virement'], required: true }
+    ],
+    quick_replies: ['🔧 Prestations', '📋 Demander devis', '📅 RDV chantier', '🚨 Urgence', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'un ARTISAN / SERVICE PROFESSIONNEL.
+RÈGLES:
+- Quand client dit bonjour, propose: voir prestations, demander devis, prendre RDV
+- Pour un devis: type de problème → adresse → photos si possible → coordonnées
+- Pour un RDV: prestation → adresse → date/heure → confirmation
+- Mentionne si urgence disponible et tarifs estimés
+- Demande adresse précise (très important pour intervention)
+- Confirme par récap clair
+- Termine par "À très vite, jërëjëf !"`
+  },
+
+  ecole_formation: {
+    icon: '🎓',
+    label: 'École / Formation',
+    description: 'Cours, formations, certifications',
+    color: '#7c3aed',
+    skills: ['education', 'rdv', 'urgence'],
+    catalogue_label: 'Formations',
+    catalogue_singular: 'formation',
+    placeholder_item: 'Ex: Formation Bureautique',
+    placeholder_price: 'Prix en FCFA (ex: 75000)',
+    questions: [
+      { key: 'type_formations', label: 'Type de formations', placeholder: 'Ex: Informatique, Langues, Comptabilité', required: true },
+      { key: 'duree_formations', label: 'Durée moyenne', placeholder: 'Ex: 3 mois, 6 mois, 1 an', required: true },
+      { key: 'certifications', label: 'Certifications délivrées', placeholder: 'Ex: Diplôme reconnu, Attestation', required: false },
+      { key: 'horaires_cours', label: 'Horaires des cours', placeholder: 'Ex: Lun-Ven 8h-17h, Samedi matin', required: true },
+      { key: 'paiement_modes', label: 'Moyens de paiement', type: 'multi', options: ['Wave', 'Orange Money', 'Espèces', 'Échéancier'], required: true }
+    ],
+    quick_replies: ['🎓 Formations', '📝 S\'inscrire', '💰 Tarifs', '📅 RDV info', '📞 Contact'],
+    prompt_metier: `Tu es l'assistant d'une ÉCOLE / CENTRE DE FORMATION.
+RÈGLES:
+- Quand client dit bonjour, propose: voir formations, s'inscrire, RDV info
+- Pour les formations, liste avec durée, prix et certification délivrée
+- Pour une inscription: formation choisie → infos personnelles → docs requis → RDV admin
+- Mentionne les horaires et possibilité de paiement échelonné
+- Demande infos étudiant (nom, tél, niveau actuel)
+- Confirme par récap avec démarches à suivre
+- Termine par "Bonne formation, jërëjëf !"`
+  }
+};
+
+// ─── ENDPOINTS API ────────────────────────────────────────────
+
+// Liste tous les templates disponibles
+app.get('/onboarding-v2/niches', (req, res) => {
+  const niches = Object.entries(NICHE_TEMPLATES_V2).map(([id, t]) => ({
+    id,
+    label: t.label,
+    description: t.description,
+    icon: t.icon,
+    color: t.color,
+    skills_auto: t.skills,
+    nb_questions: t.questions.length
+  }));
+  res.json({ niches, total: niches.length });
+});
+
+// Récupère le template complet d'une niche
+app.get('/onboarding-v2/template/:nicheId', (req, res) => {
+  const template = NICHE_TEMPLATES_V2[req.params.nicheId];
+  if (!template) return res.status(404).json({ error: 'Niche inconnue' });
+  res.json({
+    id: req.params.nicheId,
+    ...template
+  });
+});
+
+// Crée le bot avec configuration adaptative
+app.post('/onboarding-v2/create', authMiddleware, async (req, res) => {
+  try {
+    const { niche, business_name, ville, telephone_pro, color, niche_data, catalogue_items } = req.body;
+    
+    if (!niche || !business_name) return res.status(400).json({ error: 'Niche et nom requis' });
+    
+    const template = NICHE_TEMPLATES_V2[niche];
+    if (!template) return res.status(400).json({ error: 'Niche invalide' });
+    
+    // Génère un bot_id unique
+    const slug = (business_name||'bot').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20);
+    const botId = `${slug||'bot'}-${Math.random().toString(36).slice(2,9)}`;
+    
+    // Construction du prompt système ADAPTATIF
+    const niche_data_str = niche_data ? Object.entries(niche_data)
+      .filter(([k,v]) => v && v !== '')
+      .map(([k,v]) => `- ${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+      .join('\n') : '';
+    
+    const fullPrompt = `${template.prompt_metier}
+
+INFOS DU BUSINESS:
+- Nom: ${business_name}
+- Ville: ${ville || 'Dakar'}
+- Téléphone: ${telephone_pro || 'à compléter'}
+- Type: ${template.label}
+
+CONFIGURATION SPÉCIFIQUE:
+${niche_data_str || '(à compléter dans le dashboard)'}
+
+LANGUES:
+- Tu réponds toujours dans la langue du client (français ou wolof)
+- Utilise "Asalaa maalekum", "Jërëjëf", "Waaw" naturellement en wolof
+
+STYLE:
+- Chaleureux, professionnel, efficace
+- Réponses courtes (2-4 phrases max)
+- Liste produits/services avec tirets
+- Emojis pertinents pour la lisibilité`;
+    
+    // Détermine livraison + paiement depuis niche_data
+    const livraison_actif = !!(niche_data?.livraison_actif === true || niche_data?.livraison_actif === 'true');
+    const livraison_zones = niche_data?.livraison_zones || (livraison_actif ? 'Dakar' : null);
+    const livraison_frais = parseInt(niche_data?.livraison_frais) || 0;
+    const livraison_delai = niche_data?.livraison_delai || '30-45 min';
+    
+    const paiement_modes = niche_data?.paiement_modes || ['Wave', 'Orange Money', 'Espèces'];
+    const paiement_str = Array.isArray(paiement_modes) ? paiement_modes.join(', ') : paiement_modes;
+    
+    // Configuration finale du bot
+    const config = {
+      id: botId,
+      user_id: req.userId,
+      nom: business_name,
+      ville: ville || 'Dakar',
+      telephone: telephone_pro || null,
+      niche,
+      couleur: color || template.color,
+      emoji: template.icon,
+      prompt: fullPrompt,
+      langues: ['fr', 'wo'],
+      actif: true,
+      plan: 'trial',
+      trial_until: new Date(Date.now() + 3*24*60*60*1000).toISOString(),
+      created_at: new Date().toISOString(),
+      
+      // ✅ Skills v10.5 auto-activés
+      skills: template.skills,
+      
+      // ✅ Quick replies adaptés
+      quick_replies: template.quick_replies,
+      
+      // ✅ Livraison configurée
+      livraison_actif,
+      livraison_zones,
+      livraison_frais,
+      livraison_delai,
+      livraison_min: 0,
+      
+      // ✅ Paiement
+      paiement: paiement_str,
+      
+      // ✅ Métadonnées spécifiques
+      niche_metadata: niche_data || {}
+    };
+    
+    const inserted = await db.insert('bots', config);
+    if (!inserted?.[0]) return res.status(500).json({ error: 'Erreur création bot' });
+    
+    // ✅ Insertion du catalogue/produits/services
+    let cat_count = 0;
+    if (Array.isArray(catalogue_items) && catalogue_items.length > 0) {
+      for (const item of catalogue_items) {
+        if (!item.nom) continue;
+        try {
+          await db.insert('produits', {
+            bot_id: botId,
+            nom: item.nom,
+            prix: parseInt(item.prix) || 0,
+            desc: item.description || null,
+            actif: true,
+            visible: true,
+            emoji: item.emoji || template.icon,
+            created_at: new Date().toISOString()
+          });
+          cat_count++;
+        } catch(e) { console.warn('Insert produit failed:', e.message); }
+      }
+    }
+    
+    res.json({
+      success: true,
+      bot_id: botId,
+      bot_url: `${CONFIG.BASE_URL}/?bot=${botId}`,
+      dashboard_url: `${CONFIG.BASE_URL}/admin/${botId}`,
+      embed_code: `<script src="${CONFIG.BASE_URL}/widget.js" data-bot="${botId}"></script>`,
+      trial_until: config.trial_until,
+      catalogue_count: cat_count,
+      skills_actives: template.skills,
+      niche_label: template.label
+    });
+  } catch(e) {
+    console.error('Onboarding-v2 error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── PAGE WIZARD ADAPTATIF ────────────────────────────────────
+app.get('/onboarding-v2', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Crée ton bot intelligent · SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#0a1a0f,#052811);min-height:100vh;color:#fff;padding:20px}
+.wizard{max-width:720px;margin:20px auto;background:#fff;color:#0a1a0f;border-radius:24px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3)}
+.brand-header{padding:16px 40px;background:#0a1a0f;color:#fff;font-size:13px;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center}
+.brand-header b{color:#06C167}
+.progress{height:6px;background:#f0f0f0}
+.progress-bar{height:100%;background:linear-gradient(90deg,#06C167,#058048);transition:width 0.4s ease;width:20%}
+.step{padding:50px 40px;display:none}
+.step.active{display:block}
+h1{font-size:30px;margin-bottom:8px;letter-spacing:-1px;line-height:1.2}
+h1 .accent{color:#06C167}
+.subtitle{color:#57534e;margin-bottom:32px;font-size:15px;line-height:1.5}
+.step-num{display:inline-block;background:#06C167;color:#000;font-size:11px;font-weight:800;letter-spacing:1.5px;padding:4px 12px;border-radius:12px;margin-bottom:14px}
+.niche-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:24px}
+.niche-card{padding:18px 16px;border:2px solid #e5e7eb;border-radius:14px;text-align:left;cursor:pointer;transition:all 0.2s;background:#fff;display:flex;align-items:center;gap:12px}
+.niche-card:hover{border-color:#06C167;transform:translateY(-2px)}
+.niche-card.selected{border-color:#06C167;background:#f0fdf4}
+.niche-card .emoji{font-size:36px;flex-shrink:0}
+.niche-card .info{flex:1;min-width:0}
+.niche-card .lbl{font-size:14px;font-weight:700;margin-bottom:3px}
+.niche-card .desc{font-size:11px;color:#57534e;line-height:1.4}
+input,select,textarea{width:100%;padding:14px 16px;border:2px solid #e5e7eb;border-radius:12px;font-size:15px;margin-bottom:14px;outline:none;transition:border 0.2s;background:#fff;color:#0a1a0f;font-family:inherit}
+input:focus,select:focus,textarea:focus{border-color:#06C167}
+textarea{min-height:80px;resize:vertical}
+label{display:block;font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:6px}
+label .req{color:#dc2626}
+.field-group{margin-bottom:16px}
+.field-help{font-size:12px;color:#57534e;margin-top:-10px;margin-bottom:14px;padding-left:4px}
+.toggle-row{display:flex;gap:8px;margin-bottom:14px}
+.toggle-btn{flex:1;padding:12px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;font-size:14px;font-weight:600;color:#57534e;transition:all 0.15s}
+.toggle-btn.active{border-color:#06C167;background:#f0fdf4;color:#06C167}
+.multi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:14px}
+.multi-btn{padding:10px 12px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;font-size:13px;color:#57534e;transition:all 0.15s;text-align:center}
+.multi-btn.active{border-color:#06C167;background:#f0fdf4;color:#06C167;font-weight:600}
+.btn-row{display:flex;gap:10px;margin-top:16px}
+.btn{padding:14px 24px;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;border:none;transition:all 0.2s;font-family:inherit}
+.btn-primary{background:#06C167;color:#fff;flex:2}
+.btn-primary:hover{background:#058048}
+.btn-secondary{background:#f0f0f0;color:#0a1a0f;flex:1}
+.btn-secondary:hover{background:#e0e0e0}
+.btn:disabled{opacity:0.4;cursor:not-allowed}
+.color-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:24px}
+.color-swatch{height:48px;border-radius:10px;cursor:pointer;border:3px solid transparent;transition:all 0.2s}
+.color-swatch:hover{transform:scale(1.05)}
+.color-swatch.selected{border-color:#0a1a0f;transform:scale(1.05)}
+.row-2col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.catalogue-list{margin-bottom:14px}
+.catalogue-item{display:grid;grid-template-columns:2fr 1fr auto;gap:8px;margin-bottom:8px;align-items:start}
+.catalogue-item input{margin:0}
+.btn-remove{padding:10px 14px;background:#fee2e2;color:#991b1b;border:none;border-radius:10px;cursor:pointer;font-weight:600}
+.btn-add{background:#dcfce7;color:#166534;border:2px dashed #06C167;padding:12px;width:100%;border-radius:12px;cursor:pointer;font-size:14px;font-weight:600;margin-top:8px}
+.success{text-align:center;padding:60px 20px}
+.success-emoji{font-size:64px;margin-bottom:20px}
+.success h2{font-size:32px;margin-bottom:12px;color:#0a1a0f}
+.success p{color:#57534e;margin-bottom:24px;font-size:15px}
+.success-card{background:#f9fafb;border-left:4px solid #06C167;padding:18px;border-radius:10px;text-align:left;margin:14px 0;font-family:'Courier New',monospace;font-size:12px;word-break:break-all}
+.success-card strong{display:block;color:#0a1a0f;font-family:-apple-system,sans-serif;margin-bottom:6px;font-size:13px}
+.feature-pill{display:inline-block;background:#dcfce7;color:#166534;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;margin:2px}
+.preview-box{background:#f9fafb;padding:18px;border-radius:12px;margin-bottom:20px;font-size:14px;line-height:1.7;border-left:4px solid #06C167}
+.preview-box strong{color:#0a1a0f}
+.checkbox-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;padding:14px;background:#f9fafb;border-radius:10px;cursor:pointer}
+.checkbox-row input{width:auto;margin:0;flex-shrink:0;margin-top:3px}
+.checkbox-row label{font-size:13px;cursor:pointer;color:#1c1917;font-weight:500}
+.checkbox-row label a{color:#06C167}
+@media(max-width:600px){
+  .niche-grid{grid-template-columns:1fr}
+  .row-2col{grid-template-columns:1fr}
+  .color-row{grid-template-columns:repeat(3,1fr)}
+  .multi-grid{grid-template-columns:repeat(2,1fr)}
+}
+</style></head><body>
+
+<div class="wizard">
+<div class="brand-header"><span>Sama<b>Bot</b> · Onboarding intelligent v2</span><span style="opacity:0.7" id="step-counter">Étape 1/5</span></div>
+<div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+
+<div class="step active" id="step-1">
+<div class="step-num">ÉTAPE 1 / 5</div>
+<h1>Quel est ton <span class="accent">métier</span> ?</h1>
+<p class="subtitle">Le bot s'adaptera automatiquement à ton secteur. Les questions suivantes seront spécifiques à ton métier.</p>
+<div class="niche-grid" id="niche-grid"></div>
+<div class="btn-row"><button class="btn btn-primary" id="btn-step-1" disabled onclick="goStep(2)">Continuer →</button></div>
+</div>
+
+<div class="step" id="step-2">
+<div class="step-num">ÉTAPE 2 / 5</div>
+<h1>Parle-moi de ton <span class="accent">business</span></h1>
+<p class="subtitle">Ces informations apparaîtront dans les conversations avec tes clients.</p>
+<div class="field-group">
+<label>Nom de ton business <span class="req">*</span></label>
+<input type="text" id="business_name" placeholder="Ex: Chez Maman Aïcha" maxlength="50">
+</div>
+<div class="row-2col">
+<div class="field-group"><label>Ville</label><input type="text" id="ville" placeholder="Dakar" value="Dakar"></div>
+<div class="field-group"><label>WhatsApp pro</label><input type="text" id="telephone_pro" placeholder="+221 77 ..."></div>
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(1)">← Retour</button>
+<button class="btn btn-primary" onclick="goStep(3)">Continuer →</button>
+</div>
+</div>
+
+<div class="step" id="step-3">
+<div class="step-num">ÉTAPE 3 / 5</div>
+<h1>Configuration <span class="accent">métier</span></h1>
+<p class="subtitle" id="step3-subtitle">Questions spécifiques à ton secteur.</p>
+<div id="niche-questions"></div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(2)">← Retour</button>
+<button class="btn btn-primary" onclick="goStep(4)">Continuer →</button>
+</div>
+</div>
+
+<div class="step" id="step-4">
+<div class="step-num">ÉTAPE 4 / 5</div>
+<h1>Ton <span class="accent" id="cat-label">catalogue</span></h1>
+<p class="subtitle" id="step4-subtitle">Ajoute tes produits/services. Tu pourras compléter plus tard.</p>
+<div class="catalogue-list" id="catalogue-list"></div>
+<button class="btn-add" onclick="addCatalogueItem()">+ Ajouter un <span id="cat-singular">item</span></button>
+<div style="margin-top:24px">
+<label>🎨 Couleur du bot</label>
+<div class="color-row" id="color-row">
+<div class="color-swatch selected" data-color="#06C167" style="background:#06C167"></div>
+<div class="color-swatch" data-color="#3b82f6" style="background:#3b82f6"></div>
+<div class="color-swatch" data-color="#8b5cf6" style="background:#8b5cf6"></div>
+<div class="color-swatch" data-color="#ec4899" style="background:#ec4899"></div>
+<div class="color-swatch" data-color="#f59e0b" style="background:#f59e0b"></div>
+<div class="color-swatch" data-color="#dc2626" style="background:#dc2626"></div>
+</div>
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(3)">← Retour</button>
+<button class="btn btn-primary" onclick="goStep(5)">Continuer →</button>
+</div>
+</div>
+
+<div class="step" id="step-5">
+<div class="step-num">ÉTAPE 5 / 5</div>
+<h1>Prêt à <span class="accent">décoller</span> ?</h1>
+<p class="subtitle">Vérifie le résumé puis crée ton bot intelligent. 3 jours d'essai gratuit, sans carte bancaire.</p>
+<div class="preview-box" id="preview"></div>
+<div class="checkbox-row">
+<input type="checkbox" id="cgu_accept">
+<label for="cgu_accept">J'accepte les <a href="/terms" target="_blank">Conditions générales</a> et la <a href="/privacy-full" target="_blank">Politique de confidentialité</a>.</label>
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(4)">← Retour</button>
+<button class="btn btn-primary" id="btn-create" onclick="createBot()" disabled>🚀 Créer mon bot</button>
+</div>
+</div>
+
+<div class="step" id="step-6">
+<div class="success">
+<div class="success-emoji">🎉</div>
+<h2>Ton bot est <span class="accent">live</span> !</h2>
+<p>Bienvenue dans SamaBot. 3 jours d'essai gratuit, sans carte bancaire.</p>
+<div class="success-card"><strong>🌐 URL de ton bot</strong><span id="bot-url"></span></div>
+<div class="success-card"><strong>📊 Tableau de bord</strong><span id="dashboard-url"></span></div>
+<div class="success-card"><strong>📝 Code embed</strong><span id="embed-code"></span></div>
+<div style="margin-top:24px"><div id="success-pills"></div></div>
+<div class="btn-row" style="margin-top:24px;justify-content:center">
+<button class="btn btn-primary" onclick="goToBot()">→ Tester mon bot</button>
+</div>
+</div>
+</div>
+
+</div>
+
+<script>
+let availableNiches = [];
+let currentTemplate = null;
+let state = {
+  niche: null,
+  business_name: '',
+  ville: 'Dakar',
+  telephone_pro: '',
+  color: '#06C167',
+  niche_data: {},
+  catalogue_items: []
+};
+
+async function loadNiches() {
+  try {
+    const r = await fetch('/onboarding-v2/niches');
+    const data = await r.json();
+    availableNiches = data.niches;
+    renderNiches();
+  } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+function renderNiches() {
+  const grid = document.getElementById('niche-grid');
+  grid.innerHTML = availableNiches.map(n =>
+    '<div class="niche-card" data-id="' + n.id + '" onclick="selectNiche(\\'' + n.id + '\\')">' +
+    '<div class="emoji">' + n.icon + '</div>' +
+    '<div class="info">' +
+    '<div class="lbl">' + n.label + '</div>' +
+    '<div class="desc">' + n.description + '</div>' +
+    '</div></div>'
+  ).join('');
+}
+
+async function selectNiche(id) {
+  document.querySelectorAll('.niche-card').forEach(c => c.classList.remove('selected'));
+  document.querySelector('[data-id="' + id + '"]').classList.add('selected');
+  state.niche = id;
+  document.getElementById('btn-step-1').disabled = false;
+  
+  const r = await fetch('/onboarding-v2/template/' + id);
+  currentTemplate = await r.json();
+  
+  document.getElementById('cat-label').textContent = currentTemplate.catalogue_label.toLowerCase();
+  document.getElementById('cat-singular').textContent = currentTemplate.catalogue_singular;
+  document.getElementById('step3-subtitle').textContent = 'Questions spécifiques pour ' + currentTemplate.label.toLowerCase() + '.';
+}
+
+function renderQuestions() {
+  if (!currentTemplate || !currentTemplate.questions) return;
+  const container = document.getElementById('niche-questions');
+  container.innerHTML = currentTemplate.questions.map((q, idx) => {
+    const reqMark = q.required ? '<span class="req">*</span>' : '';
+    if (q.type === 'boolean') {
+      return '<div class="field-group">' +
+        '<label>' + q.label + ' ' + reqMark + '</label>' +
+        '<div class="toggle-row">' +
+        '<button type="button" class="toggle-btn" data-q="' + q.key + '" data-v="true" onclick="toggleBool(\\'' + q.key + '\\', true)">✓ Oui</button>' +
+        '<button type="button" class="toggle-btn" data-q="' + q.key + '" data-v="false" onclick="toggleBool(\\'' + q.key + '\\', false)">✗ Non</button>' +
+        '</div></div>';
+    }
+    if (q.type === 'multi') {
+      return '<div class="field-group">' +
+        '<label>' + q.label + ' ' + reqMark + '</label>' +
+        '<div class="multi-grid">' +
+        q.options.map(opt => 
+          '<button type="button" class="multi-btn" data-q="' + q.key + '" data-v="' + opt + '" onclick="toggleMulti(\\'' + q.key + '\\', \\'' + opt + '\\')">' + opt + '</button>'
+        ).join('') +
+        '</div></div>';
+    }
+    if (q.type === 'number') {
+      return '<div class="field-group">' +
+        '<label>' + q.label + ' ' + reqMark + '</label>' +
+        '<input type="number" data-q="' + q.key + '" placeholder="' + (q.placeholder || '') + '" onchange="setNicheData(\\'' + q.key + '\\', this.value)">' +
+        '</div>';
+    }
+    return '<div class="field-group">' +
+      '<label>' + q.label + ' ' + reqMark + '</label>' +
+      '<input type="text" data-q="' + q.key + '" placeholder="' + (q.placeholder || '') + '" onchange="setNicheData(\\'' + q.key + '\\', this.value)">' +
+      '</div>';
+  }).join('');
+}
+
+function setNicheData(key, value) {
+  state.niche_data[key] = value;
+}
+
+function toggleBool(key, value) {
+  state.niche_data[key] = value;
+  document.querySelectorAll('[data-q="' + key + '"]').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-q="' + key + '"][data-v="' + value + '"]').classList.add('active');
+}
+
+function toggleMulti(key, value) {
+  if (!Array.isArray(state.niche_data[key])) state.niche_data[key] = [];
+  const idx = state.niche_data[key].indexOf(value);
+  if (idx >= 0) {
+    state.niche_data[key].splice(idx, 1);
+  } else {
+    state.niche_data[key].push(value);
+  }
+  const btn = document.querySelector('[data-q="' + key + '"][data-v="' + value + '"]');
+  if (btn) btn.classList.toggle('active');
+}
+
+function addCatalogueItem() {
+  state.catalogue_items.push({ nom: '', prix: '', description: '' });
+  renderCatalogue();
+}
+
+function removeCatalogueItem(idx) {
+  state.catalogue_items.splice(idx, 1);
+  renderCatalogue();
+}
+
+function updateCatalogueItem(idx, field, value) {
+  if (state.catalogue_items[idx]) {
+    state.catalogue_items[idx][field] = value;
+  }
+}
+
+function renderCatalogue() {
+  const list = document.getElementById('catalogue-list');
+  if (!currentTemplate) return;
+  if (state.catalogue_items.length === 0) {
+    list.innerHTML = '<p style="color:#999;font-size:13px;text-align:center;padding:20px">Aucun ' + currentTemplate.catalogue_singular + ' encore.</p>';
+    return;
+  }
+  list.innerHTML = state.catalogue_items.map((item, idx) =>
+    '<div class="catalogue-item">' +
+    '<input type="text" placeholder="' + currentTemplate.placeholder_item + '" value="' + (item.nom || '') + '" onchange="updateCatalogueItem(' + idx + ', \\'nom\\', this.value)">' +
+    '<input type="text" placeholder="' + currentTemplate.placeholder_price + '" value="' + (item.prix || '') + '" onchange="updateCatalogueItem(' + idx + ', \\'prix\\', this.value)">' +
+    '<button class="btn-remove" type="button" onclick="removeCatalogueItem(' + idx + ')">🗑</button>' +
+    '</div>'
+  ).join('');
+}
+
+document.querySelectorAll('.color-swatch').forEach(sw => {
+  sw.onclick = () => {
+    document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+    sw.classList.add('selected');
+    state.color = sw.dataset.color;
+  };
+});
+
+document.getElementById('cgu_accept').onchange = (e) => {
+  document.getElementById('btn-create').disabled = !e.target.checked;
+};
+
+function updateProgress(step) {
+  document.getElementById('progress-bar').style.width = (step * 20) + '%';
+  document.getElementById('step-counter').textContent = 'Étape ' + Math.min(step, 5) + '/5';
+}
+
+function goStep(n) {
+  if (n === 2 && !state.niche) { alert('Choisis ton métier'); return; }
+  if (n === 3) {
+    state.business_name = document.getElementById('business_name').value.trim();
+    state.ville = document.getElementById('ville').value.trim() || 'Dakar';
+    state.telephone_pro = document.getElementById('telephone_pro').value.trim();
+    if (!state.business_name) { alert('Donne un nom à ton business'); return; }
+    renderQuestions();
+  }
+  if (n === 4) {
+    if (state.catalogue_items.length === 0) {
+      addCatalogueItem();
+    } else {
+      renderCatalogue();
+    }
+  }
+  if (n === 5) {
+    const t = currentTemplate;
+    let html = '<strong>' + t.icon + ' ' + t.label + '</strong>: ' + state.business_name + '<br>';
+    html += '📍 ' + state.ville;
+    if (state.telephone_pro) html += ' · 📱 ' + state.telephone_pro;
+    html += '<br>🎨 Couleur ' + state.color;
+    html += '<br>🧠 Skills auto: ' + t.skills_auto.join(', ');
+    const validCat = state.catalogue_items.filter(i => i.nom);
+    if (validCat.length > 0) {
+      html += '<br>📋 ' + validCat.length + ' ' + t.catalogue_label.toLowerCase() + ' configurés';
+    }
+    document.getElementById('preview').innerHTML = html;
+  }
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+  updateProgress(Math.min(n, 5));
+}
+
+async function createBot() {
+  const btn = document.getElementById('btn-create');
+  btn.disabled = true;
+  btn.textContent = '⏳ Création en cours...';
+  try {
+    const token = localStorage.getItem('samabot_token');
+    if (!token) {
+      alert('Tu dois te connecter d\\'abord.');
+      window.location.href = '/login?redirect=/onboarding-v2';
+      return;
+    }
+    const validCatalogue = state.catalogue_items.filter(i => i.nom && i.prix);
+    const r = await fetch('/onboarding-v2/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({
+        niche: state.niche,
+        business_name: state.business_name,
+        ville: state.ville,
+        telephone_pro: state.telephone_pro,
+        color: state.color,
+        niche_data: state.niche_data,
+        catalogue_items: validCatalogue
+      })
+    });
+    const data = await r.json();
+    if (!r.ok || !data.success) {
+      alert('Erreur: ' + (data.error || 'inconnue'));
+      btn.disabled = false;
+      btn.textContent = '🚀 Créer mon bot';
+      return;
+    }
+    document.getElementById('bot-url').textContent = data.bot_url;
+    document.getElementById('dashboard-url').textContent = data.dashboard_url;
+    document.getElementById('embed-code').textContent = data.embed_code;
+    
+    let pillsHtml = '<span class="feature-pill">✓ Bot créé</span>';
+    pillsHtml += '<span class="feature-pill">✓ Trial 3 jours</span>';
+    pillsHtml += '<span class="feature-pill">✓ ' + data.niche_label + '</span>';
+    if (data.catalogue_count > 0) pillsHtml += '<span class="feature-pill">✓ ' + data.catalogue_count + ' items</span>';
+    if (data.skills_actives) pillsHtml += '<span class="feature-pill">✓ ' + data.skills_actives.length + ' skills actifs</span>';
+    document.getElementById('success-pills').innerHTML = pillsHtml;
+    
+    document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+    document.getElementById('step-6').classList.add('active');
+    document.getElementById('progress-bar').style.width = '100%';
+    document.getElementById('step-counter').textContent = '✅ Terminé';
+    
+    window.__BOT_URL = data.bot_url;
+  } catch(e) {
+    alert('Erreur réseau: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '🚀 Créer mon bot';
+  }
+}
+
+function goToBot() {
+  if (window.__BOT_URL) window.location.href = window.__BOT_URL;
+}
+
+loadNiches();
+</script></body></html>`);
+});
+
+// FIN BLOC v10.6 ────────────────────────────────────────────
+
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🤖 SamaBot v8.0 — port ${PORT}`);
