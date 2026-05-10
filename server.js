@@ -726,11 +726,18 @@ app.post('/chat', async (req, res) => {
     const history = getHist(sid);
     const assistantMsgs = history.filter(h => h.role === 'assistant');
     const previousBotMsg = assistantMsgs.length >= 2 ? assistantMsgs[assistantMsgs.length - 2] : null;
-    const lastBotHadRecap = previousBotMsg && /récapitulatif|recapitulatif|recap|confirmez-vous/i.test(previousBotMsg.content);
+    // 🔒 v10.8: Récap STRICT — doit contenir total + confirmez/récap (pas juste un mot)
+    const lastBotHadRecap = previousBotMsg && (
+      /récapitulatif|recapitulatif/i.test(previousBotMsg.content) &&
+      /total\s*[:\-]?\s*\*?\s*\d/i.test(previousBotMsg.content) &&
+      /confirmez|valider|valid[eé]|oui pour valider/i.test(previousBotMsg.content)
+    );
 
     // Affiche les boutons paiement quand on a un total
-    if (orderTotal > 0) {
-      console.log(`💰 Total détecté: ${orderTotal} FCFA pour bot ${botId}`);
+    // 🔒 v10.8: Boutons paiement UNIQUEMENT si le bot a explicitement confirmé la commande
+    //   (évite l'affichage prématuré pendant l'étape récap)
+    if (orderTotal > 0 && botConfirmingOrder) {
+      console.log(`💰 Total détecté: ${orderTotal} FCFA pour bot ${botId} (paiement autorisé)`);
       intents.push('payment');
     }
 
@@ -11099,6 +11106,69 @@ ${memory.email ? `- Email: ${memory.email}` : ''}
 ⚠️ RÈGLE CRITIQUE: NE REDEMANDE PAS ces informations. Le client te les a déjà données. Utilise-les directement dans le récapitulatif ou la confirmation. Si tu as besoin d'infos manquantes, demande UNIQUEMENT celles qui ne sont pas dans cette liste.
 ═══════════════════════════════════════════════`;
   }
+
+  // 2.bis) FLOW STRICT — INTERDICTIONS ABSOLUES (priorité maximale)
+  // Force le bot à respecter l'ordre des étapes, sans confirmer avant le récap
+  const paiementsAcceptes = bot.paiement || 'à la livraison';
+  const flowStrict = `\n\n═══════════════════════════════════════════════
+🚨 FLOW DE COMMANDE — RÈGLES ABSOLUES À RESPECTER 🚨
+═══════════════════════════════════════════════
+
+INTERDICTIONS STRICTES:
+❌ NE DIS JAMAIS "Commande confirmée" tant que le client n'a PAS vu le récap ET dit "Oui"
+❌ NE DIS JAMAIS "Paiement à la livraison noté" avant d'avoir reçu le choix du paiement
+❌ NE PROPOSE JAMAIS le paiement avant l'étape 4 (après confirmation)
+❌ NE SAUTE AUCUNE étape, même si le client semble pressé
+
+ORDRE OBLIGATOIRE (5 étapes):
+
+ÉTAPE 1 — Client dit "commander" / liste les produits:
+  → Présente le catalogue avec tirets et prix
+  → Demande UNIQUEMENT: "Quel produit souhaitez-vous ?"
+  → STOP. Attends sa réponse.
+
+ÉTAPE 2 — Client choisit un produit (ex: "café arabica"):
+  → Annonce le détail: "Votre commande: [produit] = [prix] FCFA${bot.livraison_actif?` + livraison [frais] FCFA = total [total] FCFA`:''}"
+  → Demande SES INFOS: "Pour finaliser, j'ai besoin de:
+     • Votre prénom
+     • Votre numéro
+     ${bot.livraison_actif?'• Votre adresse de livraison (utilisez le bouton GPS)':''}"
+  → ❌ NE PARLE PAS de paiement encore !
+  → STOP. Attends ses infos.
+
+ÉTAPE 3 — Client donne ses infos (nom + tél + adresse):
+  → Fais le RÉCAPITULATIF EXACT:
+    "📋 *Récapitulatif:*
+    👤 Nom: [prénom]
+    📞 Tél: [numéro]
+    ${bot.livraison_actif?'📍 Adresse: [adresse]':''}
+    🛍️ Article: [produit]
+    💰 *Total: [montant] FCFA*
+    ${bot.livraison_actif?`🛵 Livraison: ${bot.livraison_delai||'30-45 min'}`:''}
+
+    Confirmez-vous votre commande ? Répondez *OUI* pour valider."
+  → ❌ NE PARLE PAS de paiement encore !
+  → STOP. Attends sa confirmation.
+
+ÉTAPE 4 — SEULEMENT après que le client a dit "Oui":
+  → Réponds: "✅ *Commande confirmée!*
+    💳 Comment souhaitez-vous payer ?
+    ${paiementsAcceptes.toLowerCase().includes('livraison') ? '• À la livraison' : ''}
+    ${paiementsAcceptes.toLowerCase().includes('wave') ? '• Wave' : ''}
+    ${paiementsAcceptes.toLowerCase().includes('orange') ? '• Orange Money' : ''}
+    ${paiementsAcceptes.toLowerCase().includes('espèce') || paiementsAcceptes.toLowerCase().includes('espece') ? '• Espèces' : ''}"
+  → STOP. Attends son choix.
+
+ÉTAPE 5 — Client choisit le mode de paiement:
+  → Confirme: "✅ Paiement [méthode] noté.
+    🛵 Votre commande sera livrée dans ${bot.livraison_delai||'30-45 min'}.
+    Jërëjëf [prénom] !"
+
+PAIEMENTS ACCEPTÉS POUR CE BOT: ${paiementsAcceptes}
+⚠️ NE PROPOSE QUE les modes de paiement listés ci-dessus, RIEN D'AUTRE.
+
+═══════════════════════════════════════════════`;
+  memBlock += flowStrict;
 
   // 3) Ajustements par niche — règles spécifiques pour ne pas être générique
   let nicheAdjust = '';
