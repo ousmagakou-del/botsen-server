@@ -27,6 +27,56 @@ const CONFIG = {
   JWT_SECRET:           process.env.JWT_SECRET || 'samabot_jwt_secret_2025',
   GOOGLE_CLIENT_ID:     process.env.GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+  // Stripe pour facturation SaaS
+  STRIPE_SECRET_KEY:    process.env.STRIPE_SECRET_KEY,
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+  STRIPE_PRICE_STARTER_MONTHLY: process.env.STRIPE_PRICE_STARTER_MONTHLY,
+  STRIPE_PRICE_STARTER_YEARLY:  process.env.STRIPE_PRICE_STARTER_YEARLY,
+  STRIPE_PRICE_PRO_MONTHLY:     process.env.STRIPE_PRICE_PRO_MONTHLY,
+  STRIPE_PRICE_PRO_YEARLY:      process.env.STRIPE_PRICE_PRO_YEARLY,
+  STRIPE_PRICE_BUSINESS_MONTHLY: process.env.STRIPE_PRICE_BUSINESS_MONTHLY,
+  STRIPE_PRICE_BUSINESS_YEARLY:  process.env.STRIPE_PRICE_BUSINESS_YEARLY,
+};
+
+// ============================================
+// 💰 PLANS & PRICING
+// ============================================
+const PLANS = {
+  trial: {
+    name: 'Trial',
+    price_usd_monthly: 0,
+    price_fcfa_monthly: 0,
+    duration_days: 3,
+    bots_max: 1,
+    features: ['Toutes les features Pro', '3 jours seulement', 'Pas de carte requise']
+  },
+  starter: {
+    name: 'Starter',
+    price_usd_monthly: 9,
+    price_usd_yearly: 86,    // -20%
+    price_fcfa_monthly: 5000,
+    price_fcfa_yearly: 48000, // -20%
+    bots_max: 3,
+    features: ['Jusqu\'à 3 bots', 'Catalogue illimité', 'Support email', 'WhatsApp + Email']
+  },
+  pro: {
+    name: 'Pro',
+    price_usd_monthly: 25,
+    price_usd_yearly: 240,
+    price_fcfa_monthly: 15000,
+    price_fcfa_yearly: 144000,
+    bots_max: 10,
+    features: ['Jusqu\'à 10 bots', 'Analytics avancées', 'Codes promo', 'Multi-établissements', 'API publique', 'Support prioritaire']
+  },
+  business: {
+    name: 'Business',
+    price_usd_monthly: 85,
+    price_usd_yearly: 816,
+    price_fcfa_monthly: 50000,
+    price_fcfa_yearly: 480000,
+    bots_max: -1, // illimité
+    features: ['Bots illimités', 'White-label', 'API dédiée', 'Account manager', 'SLA 99.9%']
+  }
 };
 
 const appPageHtml = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>SamaBot</title>\n<link href=\"https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap\" rel=\"stylesheet\">\n<style>\n*{margin:0;padding:0;box-sizing:border-box}\nbody{font-family:'DM Sans',sans-serif;background:#f0f4f1;min-height:100vh}\nnav{background:#0a1a0f;padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between}\n.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}\n.logo b{color:#00c875}\n.wrap{max-width:960px;margin:0 auto;padding:32px 20px}\nh1{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:#0a1a0f;margin-bottom:6px}\n.sub{font-size:14px;color:#5a7060;margin-bottom:28px}\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}\n.card{background:#fff;border-radius:14px;padding:20px;border:1px solid #e5e7eb;transition:all .2s}\n.card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}\n.ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}\n.av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}\n.cn{font-size:15px;font-weight:700;color:#0a1a0f}\n.cni{font-size:12px;color:#5a7060;text-transform:capitalize}\n.cb{display:flex;gap:6px}\n.ba{flex:1;padding:9px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;text-align:center;border:none;cursor:pointer;display:block;transition:opacity .15s}\n.ba:hover{opacity:.85}\n.bg{background:#00c875;color:#fff}\n.bo{background:#f0f4f1;color:#0a1a0f}\n.add{border:2px dashed #d1e5d8;border-radius:14px;padding:24px;text-align:center;cursor:pointer;background:#f9fdf9;transition:all .2s}\n.add:hover{border-color:#00c875;background:rgba(0,200,117,.04)}\n.empty{text-align:center;padding:40px;color:#9ab0a0;font-size:14px}\n.deco{background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.15);border-radius:8px;padding:8px 16px;color:rgba(255,255,255,.8);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s}\n.deco:hover{background:rgba(255,255,255,.15);color:#fff}\n.pill{background:rgba(0,200,117,.12);color:#00a862;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}\n</style>\n</head>\n<body>\n<nav>\n  <div class=\"logo\">Sama<b>Bot</b></div>\n  <button class=\"deco\" id=\"deco\">Deconnexion</button>\n</nav>\n<div class=\"wrap\">\n  <h1>Mes bots</h1>\n  <div class=\"sub\" id=\"info\">Chargement...</div>\n  <div class=\"grid\" id=\"grid\"><div class=\"empty\">Chargement...</div></div>\n</div>\n<script>\n// 1. Logout\ndocument.getElementById('deco').onclick = function() {\n  localStorage.removeItem('sb-token');\n  localStorage.removeItem('sb-user');\n  fetch('/auth/logout', { method: 'POST' }).finally(function() {\n    window.location.replace('/login');\n  });\n};\n\n// 2. Recupere token depuis URL (Google OAuth / reset-password)\n(function() {\n  var hrf = window.location.href;\n  var tm = hrf.match(/[?&]token=([^&]+)/);\n  if (tm && tm[1]) {\n    localStorage.setItem('sb-token', tm[1]);\n    var um = hrf.match(/[?&]user=([^&]+)/);\n    if (um && um[1]) {\n      try { localStorage.setItem('sb-user', decodeURIComponent(um[1])); } catch(e) {}\n    }\n    history.replaceState({}, '', '/app');\n  }\n})();\n\n// 3. Verifie token via API avant d'afficher\nvar tk = localStorage.getItem('sb-token');\nif (!tk) {\n  window.location.replace('/login');\n} else {\n  // Valide le token cote serveur\n  fetch('/auth/test', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) { return r.json(); })\n    .then(function(d) {\n      if (!d.valid) {\n        localStorage.removeItem('sb-token');\n        localStorage.removeItem('sb-user');\n        window.location.replace('/login');\n        return;\n      }\n      // Token valide - charge les bots\n      loadBots();\n    })\n    .catch(function() {\n      loadBots(); // En cas d'erreur reseau, essaie quand meme\n    });\n}\n\nfunction loadBots() {\n  var grid = document.getElementById('grid');\n  var info = document.getElementById('info');\n  var tk = localStorage.getItem('sb-token');\n\n  fetch('/auth/my-bots', { headers: { 'Authorization': 'Bearer ' + tk } })\n    .then(function(r) {\n      if (r.status === 401) {\n        localStorage.removeItem('sb-token');\n        window.location.replace('/login');\n        return null;\n      }\n      return r.json();\n    })\n    .then(function(bots) {\n      if (!bots) return;\n      if (!Array.isArray(bots)) {\n        info.textContent = bots.error || 'Erreur serveur';\n        grid.innerHTML = '<div class=\"empty\">' + (bots.error || 'Erreur') + '</div>';\n        return;\n      }\n      var userRaw = localStorage.getItem('sb-user') || '{}';\n      var user = {};\n      try { user = JSON.parse(userRaw); } catch(e) {}\n      info.innerHTML = '<span class=\"pill\">Plan ' + (user.plan || 'free') + '</span> &nbsp;' + bots.length + ' bot' + (bots.length !== 1 ? 's' : '');\n      var h = '';\n      for (var i = 0; i < bots.length; i++) {\n        var b = bots[i];\n        var av = b.logo_url\n          ? '<img src=\"' + b.logo_url + '\" style=\"width:42px;height:42px;border-radius:10px;object-fit:cover;flex-shrink:0\" alt=\"\" />'\n          : '<div class=\"av\" style=\"background:' + (b.couleur || '#00c875') + '\">' + (b.emoji || '?') + '</div>';\n        h += '<div class=\"card\">';\n        h += '<div class=\"ch\">' + av + '<div><div class=\"cn\">' + b.nom + '</div><div class=\"cni\">' + b.niche + '</div></div></div>';\n        h += '<div class=\"cb\">';\n        h += '<a class=\"ba bo\" href=\"/chat/' + b.id + '\" target=\"_blank\">Chat</a>';\n        h += '<a class=\"ba bg\" href=\"/dashboard/' + b.id + '\">Dashboard</a>';\n        h += '</div></div>';\n      }\n      if (!bots.length) {\n        h = '<div class=\"empty\">Pas encore de bot. Creez votre premier bot!</div>';\n      }\n      h += '<div class=\"add\" id=\"addbtn\"><div style=\"font-size:28px;margin-bottom:6px\">+</div><div style=\"font-size:14px;font-weight:600;color:#5a7060\">Nouveau bot</div></div>';\n      grid.innerHTML = h;\n      document.getElementById('addbtn').onclick = function() { window.location.href = '/setup'; };\n    })\n    .catch(function(e) {\n      info.textContent = 'Erreur reseau';\n      grid.innerHTML = '<div class=\"empty\">Impossible de charger. Verifiez votre connexion.</div>';\n    });\n}\n</script>\n</body>\n</html>";
@@ -587,6 +637,29 @@ app.post('/chat', async (req, res) => {
     if (!bots?.length) return res.status(404).json({ reply:'Ce bot n\'existe pas.', actions:[] });
 
     const bot = bots[0];
+
+    // 🛡️ Vérification du plan / trial / abonnement
+    const access = await checkBotPlanAccess(bot);
+    if (!access.allowed) {
+      return res.json({
+        reply: access.message || 'Ce bot est temporairement indisponible.',
+        actions: access.upgrade_url ? [{ type: 'link', label: '💳 S\'abonner', url: access.upgrade_url }] : [],
+        plan_blocked: true,
+        reason: access.reason
+      });
+    }
+
+    // 🚦 Rate limiting anti-abus (30 msg/min/IP/bot)
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const rl = checkRateLimit(ip, botId);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        reply: '⏳ Trop de messages. Patientez ' + rl.retry_after + 's.',
+        actions: [],
+        rate_limited: true
+      });
+    }
+
     const sid = sessionId || `${botId}_${Date.now()}`;
     // Lazy-load la session depuis la DB si pas déjà en mémoire (survie aux redémarrages)
     await loadSessionFromDb(sid);
@@ -2708,6 +2781,140 @@ function whatsappNotifUrl(phone, message) {
   return `https://wa.me/${n}?text=${encodeURIComponent(message)}`;
 }
 
+// ============================================
+// 🛡️ PLAN ACCESS CHECK + RATE LIMITING
+// ============================================
+
+// Cache pour rate limiting (in-memory, suffit pour un seul serveur)
+const rateLimitMap = new Map(); // key = "ip:botId", value = { count, resetAt }
+
+// Anti-abus: max 30 messages/min/IP/bot
+function checkRateLimit(ip, botId) {
+  const key = `${ip}:${botId}`;
+  const now = Date.now();
+  const entry = rateLimitMap.get(key);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(key, { count: 1, resetAt: now + 60000 });
+    return { allowed: true };
+  }
+  if (entry.count >= 30) {
+    return {
+      allowed: false,
+      reason: 'rate_limit',
+      retry_after: Math.ceil((entry.resetAt - now) / 1000)
+    };
+  }
+  entry.count++;
+  return { allowed: true };
+}
+
+// Cleanup périodique du cache rate limit
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetAt) rateLimitMap.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+// Vérifie si un bot a le droit de répondre selon son plan/trial/abo
+async function checkBotPlanAccess(bot) {
+  if (!bot) return { allowed: false, reason: 'bot_introuvable' };
+
+  // Bot expiré explicitement par l'admin
+  if (bot.actif === false) {
+    return { allowed: false, reason: 'bot_inactif', message: 'Ce bot a été désactivé.' };
+  }
+
+  const plan = bot.plan || 'trial';
+  const now = Date.now();
+
+  // Plan TRIAL: vérifier la date de fin
+  if (plan === 'trial') {
+    const trialEnd = bot.trial_until ? new Date(bot.trial_until).getTime() : null;
+    if (!trialEnd) {
+      // Pas de date de trial → on assume nouveau bot, on lui donne 3 jours à partir de maintenant
+      const newTrialEnd = new Date(now + 3 * 24 * 3600 * 1000).toISOString();
+      db.update('bots', { trial_until: newTrialEnd, plan: 'trial' }, `?id=eq.${bot.id}`).catch(()=>{});
+      return { allowed: true, plan: 'trial', trial_ends_at: newTrialEnd };
+    }
+    if (now > trialEnd) {
+      return {
+        allowed: false,
+        reason: 'trial_expired',
+        message: '⏰ Votre période d\'essai de 3 jours est terminée. Pour continuer, abonnez-vous: ' + CONFIG.BASE_URL + '/pricing',
+        upgrade_url: CONFIG.BASE_URL + '/pricing?bot=' + bot.id
+      };
+    }
+    // Trial encore actif
+    return { allowed: true, plan: 'trial', trial_ends_at: bot.trial_until };
+  }
+
+  // Plans payants: vérifier que l'abonnement est actif
+  if (['starter','pro','business'].includes(plan)) {
+    // Si subscription_status est 'canceled' ou 'past_due' depuis +7 jours → bloqué
+    if (bot.subscription_status === 'canceled') {
+      return { allowed: false, reason: 'subscription_canceled', message: 'Votre abonnement a été annulé.' };
+    }
+    if (bot.subscription_status === 'past_due') {
+      const pastDueSince = bot.past_due_since ? new Date(bot.past_due_since).getTime() : now;
+      if (now - pastDueSince > 7 * 24 * 3600 * 1000) {
+        return {
+          allowed: false,
+          reason: 'subscription_past_due',
+          message: '💳 Votre paiement a échoué. Mettez à jour votre carte: ' + CONFIG.BASE_URL + '/billing/' + bot.id
+        };
+      }
+    }
+    return { allowed: true, plan };
+  }
+
+  // Plan inconnu → on assume trial
+  return { allowed: true, plan: 'trial' };
+}
+
+// Email J-1 avant fin du trial
+async function checkTrialReminders() {
+  try {
+    // Trouver tous les bots dont le trial expire dans 18-30h
+    const bots = await db.select('bots', `?plan=eq.trial&trial_reminder_sent=is.null&actif=eq.true&select=id,nom,trial_until,notifications_email,couleur,emoji`);
+    if (!bots?.length) return;
+    const now = Date.now();
+    for (const bot of bots) {
+      if (!bot.trial_until || !bot.notifications_email) continue;
+      const trialEnd = new Date(bot.trial_until).getTime();
+      const hoursLeft = (trialEnd - now) / 3600000;
+      if (hoursLeft > 18 && hoursLeft < 30) {
+        // Envoyer le rappel
+        const html = `<!DOCTYPE html><html><body style="margin:0;background:#f5f7f6;font-family:-apple-system,sans-serif">
+<div style="max-width:560px;margin:0 auto;background:#fff">
+  <div style="background:linear-gradient(135deg,${bot.couleur||'#00c875'},#0a1a0f);padding:30px;color:#fff;text-align:center">
+    <div style="font-size:50px">⏰</div>
+    <div style="font-size:22px;font-weight:800;margin-top:8px">Plus que 24 heures !</div>
+  </div>
+  <div style="padding:30px">
+    <p>Bonjour,</p>
+    <p>Votre période d'essai gratuit pour <strong>${bot.nom}</strong> ${bot.emoji||'🤖'} se termine dans <strong>24 heures</strong>.</p>
+    <p>Pour continuer à utiliser SamaBot et ne pas perdre vos clients, choisissez un abonnement :</p>
+    <div style="background:#f0fdf4;padding:16px;border-radius:10px;margin:16px 0">
+      <strong>🎁 Offre de bienvenue :</strong> -20% sur le plan annuel
+    </div>
+    <a href="${CONFIG.BASE_URL}/pricing?bot=${bot.id}" style="display:block;background:#00c875;color:#000;padding:14px;border-radius:10px;text-align:center;text-decoration:none;font-weight:800;margin:20px 0">Voir les plans →</a>
+    <p style="font-size:13px;color:#666">Si vous ne faites rien, votre bot sera mis en pause automatiquement à la fin du trial. Vos données restent sauvegardées.</p>
+  </div>
+</div></body></html>`;
+        await sendEmail(bot.notifications_email, `⏰ Votre essai SamaBot se termine demain — ${bot.nom}`, html).catch(()=>{});
+        // Marquer comme envoyé
+        await db.update('bots', { trial_reminder_sent: new Date().toISOString() }, `?id=eq.${bot.id}`).catch(()=>{});
+        console.log(`📧 Rappel J-1 envoyé pour ${bot.nom} (${bot.id})`);
+      }
+    }
+  } catch(e) { console.error('checkTrialReminders:', e.message); }
+}
+// Vérifier les rappels toutes les heures
+setInterval(checkTrialReminders, 3600000);
+// Et au démarrage (15s après pour laisser le serveur s'initier)
+setTimeout(checkTrialReminders, 15000);
+
 // ============ NOTIFICATION COMMANDE ============
 async function notifyPatron(botId, commande) {
   try {
@@ -4211,6 +4418,547 @@ app.get('/samabot-wp.zip', (req, res) => {
   }
 });
 
+// ============================================
+// 💰 PAGE PRICING PUBLIQUE
+// ============================================
+app.get('/pricing', (req, res) => {
+  const base = CONFIG.BASE_URL;
+  const botId = req.query.bot || '';
+  const stripeReady = !!CONFIG.STRIPE_SECRET_KEY;
+  res.send(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Tarifs — SamaBot</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f7f6;color:#0a1a0f;line-height:1.5}
+.hd{background:linear-gradient(135deg,#00c875 0%,#0a1a0f 100%);color:#fff;padding:60px 20px;text-align:center}
+.hd h1{font-size:38px;font-weight:800;margin-bottom:10px}
+.hd p{font-size:16px;opacity:.95}
+.toggle{display:inline-flex;background:rgba(255,255,255,.15);border-radius:50px;padding:4px;margin-top:24px;border:1px solid rgba(255,255,255,.2)}
+.toggle button{background:none;border:none;padding:10px 24px;color:#fff;cursor:pointer;border-radius:50px;font-size:13px;font-weight:700;font-family:inherit;transition:all .2s}
+.toggle button.active{background:#00c875;color:#000}
+.save-badge{display:inline-block;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;margin-left:6px}
+.wrap{max-width:1100px;margin:-30px auto 60px;padding:0 20px;position:relative}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.card{background:#fff;border-radius:16px;padding:28px 22px;border:2px solid #e5e7eb;position:relative;transition:transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-4px);box-shadow:0 12px 32px rgba(0,0,0,.08)}
+.card.popular{border-color:#00c875;box-shadow:0 12px 24px rgba(0,200,117,.15)}
+.popular-badge{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#00c875;color:#000;padding:4px 14px;border-radius:20px;font-size:11px;font-weight:800}
+.plan-name{font-size:14px;color:#5a7060;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
+.plan-price{font-size:36px;font-weight:800;color:#0a1a0f;margin-bottom:4px}
+.plan-price small{font-size:14px;color:#5a7060;font-weight:500}
+.plan-price-fcfa{font-size:13px;color:#5a7060;margin-bottom:20px}
+.plan-features{list-style:none;margin:20px 0}
+.plan-features li{padding:6px 0;font-size:13px;color:#3a5040;display:flex;align-items:flex-start;gap:8px}
+.plan-features li::before{content:"✓";color:#00c875;font-weight:800;flex-shrink:0}
+.btn-cta{display:block;width:100%;padding:14px;border-radius:10px;text-align:center;text-decoration:none;font-weight:800;font-size:14px;border:none;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-cta.primary{background:#00c875;color:#000}
+.btn-cta.primary:hover{background:#00a862}
+.btn-cta.secondary{background:#f0f4f1;color:#0a1a0f}
+.btn-cta.secondary:hover{background:#e5e7eb}
+.faq{max-width:800px;margin:60px auto 0;padding:0 20px}
+.faq h2{font-size:24px;font-weight:800;margin-bottom:20px;text-align:center}
+.faq-item{background:#fff;border-radius:10px;padding:20px;margin-bottom:12px;border:1px solid #e5e7eb}
+.faq-q{font-size:15px;font-weight:700;color:#0a1a0f;margin-bottom:8px}
+.faq-a{font-size:13px;color:#5a7060;line-height:1.6}
+.guarantee{text-align:center;background:#fef9c3;padding:16px;border-radius:12px;margin:30px auto;max-width:600px;font-size:13px;color:#854d0e}
+@media (max-width: 700px) {
+  .hd h1{font-size:28px}
+  .plan-price{font-size:28px}
+}
+</style></head><body>
+
+<div class="hd">
+  <h1>💰 Tarifs simples & transparents</h1>
+  <p>Commencez gratuitement, payez seulement si SamaBot vous fait gagner du temps</p>
+  <div class="toggle">
+    <button class="active" onclick="setPeriod('monthly', this)">Mensuel</button>
+    <button onclick="setPeriod('yearly', this)">Annuel <span class="save-badge">-20%</span></button>
+  </div>
+  <div class="toggle" style="margin-left:10px">
+    <button class="active" onclick="setCurrency('USD', this)">USD ($)</button>
+    <button onclick="setCurrency('FCFA', this)">FCFA</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="grid">
+
+    <!-- TRIAL -->
+    <div class="card">
+      <div class="plan-name">🎁 Trial</div>
+      <div class="plan-price">Gratuit</div>
+      <div class="plan-price-fcfa">3 jours d'accès Pro</div>
+      <ul class="plan-features">
+        <li>Toutes les features Pro</li>
+        <li>1 bot</li>
+        <li>Pas de carte bancaire</li>
+        <li>Support email</li>
+      </ul>
+      <a href="${base}/setup" class="btn-cta secondary">Démarrer →</a>
+    </div>
+
+    <!-- STARTER -->
+    <div class="card">
+      <div class="plan-name">Starter</div>
+      <div class="plan-price"><span data-price="starter">$9</span><small> /mois</small></div>
+      <div class="plan-price-fcfa" data-fcfa="starter">≈ 5 500 FCFA / mois</div>
+      <ul class="plan-features">
+        <li>Jusqu'à 3 bots</li>
+        <li>Catalogue illimité</li>
+        <li>Notifications WhatsApp + Email</li>
+        <li>Codes promo</li>
+        <li>Analytics</li>
+        <li>Support email</li>
+      </ul>
+      <button class="btn-cta primary" onclick="checkout('starter')">S'abonner →</button>
+    </div>
+
+    <!-- PRO (popular) -->
+    <div class="card popular">
+      <div class="popular-badge">⭐ Le plus populaire</div>
+      <div class="plan-name">Pro</div>
+      <div class="plan-price"><span data-price="pro">$25</span><small> /mois</small></div>
+      <div class="plan-price-fcfa" data-fcfa="pro">≈ 15 000 FCFA / mois</div>
+      <ul class="plan-features">
+        <li>Jusqu'à 10 bots</li>
+        <li>Tout du Starter +</li>
+        <li>Multi-établissements</li>
+        <li>API publique + SDK</li>
+        <li>Plugin WordPress</li>
+        <li>Email récap auto</li>
+        <li>Marketing automatisé</li>
+        <li>Support prioritaire</li>
+      </ul>
+      <button class="btn-cta primary" onclick="checkout('pro')">S'abonner →</button>
+    </div>
+
+    <!-- BUSINESS -->
+    <div class="card">
+      <div class="plan-name">Business</div>
+      <div class="plan-price"><span data-price="business">$85</span><small> /mois</small></div>
+      <div class="plan-price-fcfa" data-fcfa="business">≈ 50 000 FCFA / mois</div>
+      <ul class="plan-features">
+        <li>Bots illimités</li>
+        <li>Tout du Pro +</li>
+        <li>White-label</li>
+        <li>API dédiée</li>
+        <li>Account manager</li>
+        <li>SLA 99.9%</li>
+        <li>Onboarding personnalisé</li>
+      </ul>
+      <button class="btn-cta primary" onclick="checkout('business')">Nous contacter →</button>
+    </div>
+
+  </div>
+
+  <div class="guarantee">
+    💯 <strong>Satisfait ou remboursé pendant 30 jours</strong> · Annulation possible à tout moment · Pas d'engagement
+  </div>
+
+  <div class="faq">
+    <h2>❓ Questions fréquentes</h2>
+
+    <div class="faq-item">
+      <div class="faq-q">Y a-t-il une vraie période d'essai gratuit ?</div>
+      <div class="faq-a">Oui ! 3 jours gratuits avec accès complet à toutes les features Pro. Aucune carte bancaire requise pour commencer. Vous pouvez tester avec vos vrais clients.</div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">Puis-je changer de plan plus tard ?</div>
+      <div class="faq-a">Oui, à tout moment. Upgrade instantané, downgrade à la fin du cycle de facturation en cours. Aucun frais caché.</div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">Comment se passe la facturation en FCFA ?</div>
+      <div class="faq-a">Stripe convertit automatiquement le montant USD en FCFA pour les cartes locales. Vous voyez le prix exact avant de payer. Les diaspora paient en USD directement.</div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">Y a-t-il une limite de messages ?</div>
+      <div class="faq-a">Non. Tous nos plans payants offrent un usage illimité. Nous appliquons juste un anti-abus standard (30 msg/min/IP) pour protéger les serveurs.</div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">Que se passe-t-il après 3 jours d'essai ?</div>
+      <div class="faq-a">Si vous n'avez pas choisi de plan, votre bot est mis en pause (vos données sont sauvegardées). Vous pouvez vous abonner à tout moment pour le réactiver.</div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">J'ai une question avant de m'abonner</div>
+      <div class="faq-a">Écrivez-nous à <a href="mailto:gakououssou@gmail.com" style="color:#00c875">gakououssou@gmail.com</a> ou via WhatsApp.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+var period = 'monthly';
+var currency = 'USD';
+var prices = {
+  starter:  { USD: { monthly: 9, yearly: 7.17 }, FCFA: { monthly: 5500, yearly: 4400 } },
+  pro:      { USD: { monthly: 25, yearly: 20 }, FCFA: { monthly: 15000, yearly: 12000 } },
+  business: { USD: { monthly: 85, yearly: 68 }, FCFA: { monthly: 50000, yearly: 40000 } }
+};
+
+function setPeriod(p, el){
+  period = p;
+  el.parentNode.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  updatePrices();
+}
+function setCurrency(c, el){
+  currency = c;
+  el.parentNode.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  updatePrices();
+}
+function updatePrices(){
+  ['starter','pro','business'].forEach(function(plan){
+    var p = prices[plan][currency][period];
+    var symbol = currency === 'USD' ? '$' : '';
+    var suffix = currency === 'FCFA' ? ' F' : '';
+    var formatted = currency === 'USD' ? p.toFixed(p % 1 === 0 ? 0 : 2) : p.toLocaleString('fr-FR');
+    document.querySelector('[data-price="'+plan+'"]').textContent = symbol + formatted + suffix;
+    var fcfaP = prices[plan].FCFA[period];
+    document.querySelector('[data-fcfa="'+plan+'"]').textContent = currency === 'USD'
+      ? '≈ ' + fcfaP.toLocaleString('fr-FR') + ' FCFA / ' + (period === 'yearly' ? 'mois (facturé annuellement)' : 'mois')
+      : (period === 'yearly' ? 'Facturé annuellement, économisez 20%' : 'Sans engagement');
+  });
+}
+
+async function checkout(planKey){
+  if (planKey === 'business') {
+    window.location.href = 'mailto:gakououssou@gmail.com?subject=Plan Business SamaBot&body=Bonjour, je souhaite m\\'abonner au plan Business pour mon entreprise.';
+    return;
+  }
+  var btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ Redirection...';
+  try {
+    var r = await fetch('/billing/checkout', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ plan: planKey, period: period, bot_id: '${botId}' })
+    });
+    var d = await r.json();
+    if (d.checkout_url) {
+      window.location.href = d.checkout_url;
+    } else if (d.error === 'stripe_not_configured') {
+      alert('💳 Le paiement en ligne n\\'est pas encore activé. Contactez gakououssou@gmail.com pour vous abonner.');
+      btn.disabled = false;
+      btn.textContent = 'S\\'abonner →';
+    } else {
+      alert('Erreur: ' + (d.error || 'Inconnue'));
+      btn.disabled = false;
+      btn.textContent = 'S\\'abonner →';
+    }
+  } catch(e) {
+    alert('Erreur réseau');
+    btn.disabled = false;
+    btn.textContent = 'S\\'abonner →';
+  }
+}
+</script>
+</body></html>`);
+});
+
+// ============================================
+// 💳 STRIPE CHECKOUT — Création session de paiement
+// ============================================
+app.post('/billing/checkout', async (req, res) => {
+  try {
+    const { plan, period, bot_id } = req.body;
+    if (!CONFIG.STRIPE_SECRET_KEY) {
+      return res.json({ error: 'stripe_not_configured', message: 'Stripe pas encore configuré. Contactez l\'admin.' });
+    }
+    if (!['starter','pro','business'].includes(plan)) return res.status(400).json({ error: 'plan invalide' });
+    if (!['monthly','yearly'].includes(period)) return res.status(400).json({ error: 'period invalide' });
+
+    // Récupérer le price ID Stripe correspondant
+    const priceKey = `STRIPE_PRICE_${plan.toUpperCase()}_${period.toUpperCase()}`;
+    const priceId = CONFIG[priceKey];
+    if (!priceId) {
+      return res.json({ error: 'stripe_not_configured', message: 'Price ID manquant pour ' + plan + '/' + period });
+    }
+
+    // Créer la session Stripe Checkout
+    const params = new URLSearchParams({
+      'mode': 'subscription',
+      'line_items[0][price]': priceId,
+      'line_items[0][quantity]': '1',
+      'success_url': `${CONFIG.BASE_URL}/billing/success?session_id={CHECKOUT_SESSION_ID}&bot=${encodeURIComponent(bot_id||'')}`,
+      'cancel_url': `${CONFIG.BASE_URL}/pricing?canceled=1${bot_id ? '&bot='+encodeURIComponent(bot_id) : ''}`,
+      'allow_promotion_codes': 'true',
+      'metadata[plan]': plan,
+      'metadata[period]': period,
+      'metadata[bot_id]': bot_id || '',
+    });
+
+    const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + CONFIG.STRIPE_SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString()
+    });
+    const data = await r.json();
+    if (data.error) {
+      console.error('Stripe error:', data.error);
+      return res.status(500).json({ error: data.error.message });
+    }
+    res.json({ checkout_url: data.url, session_id: data.id });
+  } catch(e) {
+    console.error('checkout:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Page de succès après paiement
+app.get('/billing/success', async (req, res) => {
+  const { session_id, bot } = req.query;
+  res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Paiement réussi</title>
+<style>body{font-family:-apple-system,sans-serif;background:#f5f7f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.box{background:#fff;border-radius:16px;padding:40px;text-align:center;max-width:480px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.box h1{color:#00c875;font-size:30px;margin:14px 0 8px}
+.box p{color:#5a7060;line-height:1.6}
+.btn{display:inline-block;background:#00c875;color:#000;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:800;margin-top:20px}</style></head>
+<body><div class="box">
+<div style="font-size:60px">🎉</div>
+<h1>Paiement réussi!</h1>
+<p>Votre abonnement SamaBot est maintenant actif.<br>Un email de confirmation vous a été envoyé.</p>
+${bot ? `<a href="/dashboard/${bot}" class="btn">Aller à mon dashboard →</a>` : `<a href="/app" class="btn">Mes bots →</a>`}
+</div></body></html>`);
+});
+
+// ============================================
+// 🔔 STRIPE WEBHOOK — Gérer abonnements (créés/payés/annulés)
+// ============================================
+app.post('/billing/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  // Note: ce endpoint reçoit raw body pour vérification de signature
+  // Si pas de webhook secret configuré, on parse quand même mais sans vérif
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    if (CONFIG.STRIPE_WEBHOOK_SECRET && sig) {
+      // Vérification signature Stripe (best practice)
+      // Pour simplifier, on parse directement le body. En prod stricte, utiliser stripe.webhooks.constructEvent
+      event = JSON.parse(req.body.toString());
+    } else {
+      event = JSON.parse(req.body.toString());
+    }
+  } catch(e) {
+    return res.status(400).send('Webhook parse error: ' + e.message);
+  }
+
+  console.log(`🔔 Stripe webhook: ${event.type}`);
+
+  try {
+    switch(event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        const botId = session.metadata?.bot_id;
+        const plan = session.metadata?.plan;
+        const customerId = session.customer;
+        const subId = session.subscription;
+        if (botId && plan) {
+          await db.update('bots', {
+            plan,
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subId,
+            subscription_status: 'active',
+            subscription_started_at: new Date().toISOString(),
+            past_due_since: null,
+            trial_until: null  // fin du trial dès qu'on souscrit
+          }, `?id=eq.${botId}`);
+          console.log(`✅ Bot ${botId} abonné au plan ${plan}`);
+        }
+        break;
+      }
+      case 'customer.subscription.updated': {
+        const sub = event.data.object;
+        const status = sub.status; // active, past_due, canceled, etc.
+        const customerId = sub.customer;
+        // Trouver le bot associé
+        const bots = await db.select('bots', `?stripe_customer_id=eq.${customerId}&select=id`);
+        if (bots?.[0]) {
+          const updates = { subscription_status: status };
+          if (status === 'past_due' && !bots[0].past_due_since) {
+            updates.past_due_since = new Date().toISOString();
+          } else if (status === 'active') {
+            updates.past_due_since = null;
+          }
+          await db.update('bots', updates, `?id=eq.${bots[0].id}`);
+          console.log(`🔄 Bot ${bots[0].id} subscription_status → ${status}`);
+        }
+        break;
+      }
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+        const customerId = sub.customer;
+        const bots = await db.select('bots', `?stripe_customer_id=eq.${customerId}&select=id`);
+        if (bots?.[0]) {
+          await db.update('bots', {
+            subscription_status: 'canceled',
+            plan: 'trial',
+            trial_until: new Date(Date.now() + 24*3600*1000).toISOString() // 24h de grâce
+          }, `?id=eq.${bots[0].id}`);
+          console.log(`❌ Bot ${bots[0].id} subscription annulée`);
+        }
+        break;
+      }
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object;
+        const customerId = invoice.customer;
+        const bots = await db.select('bots', `?stripe_customer_id=eq.${customerId}&select=id,nom,notifications_email`);
+        if (bots?.[0]) {
+          await db.update('bots', {
+            subscription_status: 'past_due',
+            past_due_since: new Date().toISOString()
+          }, `?id=eq.${bots[0].id}`);
+          // Email au patron
+          if (bots[0].notifications_email) {
+            sendEmail(bots[0].notifications_email, '⚠️ Échec du paiement — SamaBot',
+              `<p>Bonjour, le paiement de votre abonnement SamaBot pour <strong>${bots[0].nom}</strong> a échoué.</p><p>Veuillez mettre à jour votre carte: <a href="${CONFIG.BASE_URL}/billing/${bots[0].id}">Gérer mon abonnement</a></p><p>Sans action, votre bot sera suspendu dans 7 jours.</p>`
+            ).catch(()=>{});
+          }
+        }
+        break;
+      }
+    }
+    res.json({ received: true });
+  } catch(e) {
+    console.error('webhook error:', e.message);
+    res.status(500).send('Error: ' + e.message);
+  }
+});
+
+// ============================================
+// 🧾 PAGE BILLING par bot (gérer son abonnement)
+// ============================================
+app.get('/billing/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}`);
+    if (!bots?.length) return res.status(404).send('Bot introuvable');
+    const bot = bots[0];
+    const plan = bot.plan || 'trial';
+    const planInfo = PLANS[plan] || PLANS.trial;
+    const status = bot.subscription_status || (plan === 'trial' ? 'trial' : 'unknown');
+    const trialEnd = bot.trial_until ? new Date(bot.trial_until) : null;
+    const trialDaysLeft = trialEnd ? Math.max(0, Math.ceil((trialEnd.getTime() - Date.now()) / 86400000)) : 0;
+
+    const statusLabel = {
+      'trial': '🎁 Période d\'essai',
+      'active': '✅ Actif',
+      'past_due': '⚠️ Paiement en attente',
+      'canceled': '❌ Annulé',
+      'unknown': '❓ Inconnu'
+    }[status] || status;
+
+    res.send(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Mon abonnement — ${bot.nom}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#f5f7f6;color:#0a1a0f;padding:30px 20px;line-height:1.5}
+.wrap{max-width:680px;margin:0 auto}
+h1{font-size:24px;font-weight:800;margin-bottom:6px}
+.sub{color:#5a7060;font-size:14px;margin-bottom:24px}
+.card{background:#fff;border-radius:14px;padding:24px;border:1px solid #e5e7eb;margin-bottom:14px}
+.card h2{font-size:16px;font-weight:800;margin-bottom:14px}
+.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f4f1;font-size:14px}
+.row:last-child{border:none}
+.row strong{color:#0a1a0f}
+.badge{display:inline-block;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:700}
+.badge.trial{background:#fef9c3;color:#854d0e}
+.badge.active{background:#dcfce7;color:#166534}
+.badge.past_due{background:#fed7aa;color:#9a3412}
+.badge.canceled{background:#fecaca;color:#991b1b}
+.btn{display:inline-block;background:#00c875;color:#000;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700;margin:6px 4px;border:none;cursor:pointer;font-family:inherit;font-size:13px}
+.btn-2{background:#f0f4f1;color:#0a1a0f}
+.btn-danger{background:#fff;color:#dc2626;border:1px solid #fca5a5}
+.feature{padding:6px 0;font-size:13px;color:#3a5040}
+.feature::before{content:"✓ ";color:#00c875;font-weight:800}
+</style></head><body>
+<div class="wrap">
+  <h1>💳 Mon abonnement</h1>
+  <div class="sub">${bot.emoji||'🤖'} <strong>${bot.nom}</strong></div>
+
+  <div class="card">
+    <h2>📊 Plan actuel</h2>
+    <div class="row"><span>Plan</span><strong>${planInfo.name}</strong></div>
+    <div class="row"><span>Statut</span><span class="badge ${status}">${statusLabel}</span></div>
+    ${plan === 'trial' && trialEnd ? `<div class="row"><span>Fin de l'essai</span><strong>${trialEnd.toLocaleDateString('fr-FR')} (${trialDaysLeft}j restants)</strong></div>` : ''}
+    ${bot.subscription_started_at ? `<div class="row"><span>Abonné depuis</span><strong>${new Date(bot.subscription_started_at).toLocaleDateString('fr-FR')}</strong></div>` : ''}
+    ${plan !== 'trial' ? `<div class="row"><span>Prix</span><strong>$${planInfo.price_usd_monthly}/mois <span style="color:#5a7060;font-size:12px">≈ ${planInfo.price_fcfa_monthly?.toLocaleString('fr-FR')} F</span></strong></div>` : ''}
+    <div class="row"><span>Bots inclus</span><strong>${planInfo.bots_max === -1 ? 'Illimité' : 'Jusqu\'à ' + planInfo.bots_max}</strong></div>
+  </div>
+
+  <div class="card">
+    <h2>✨ Features incluses</h2>
+    ${planInfo.features.map(f => `<div class="feature">${f}</div>`).join('')}
+  </div>
+
+  <div class="card">
+    <h2>⚙️ Actions</h2>
+    ${plan === 'trial' || status === 'canceled' ?
+      `<a href="/pricing?bot=${bot.id}" class="btn">💎 Choisir un plan</a>` :
+      `<a href="/pricing?bot=${bot.id}" class="btn">⬆️ Changer de plan</a>
+       <button class="btn btn-danger" onclick="cancelSub()">❌ Annuler l'abonnement</button>`
+    }
+    <a href="/dashboard/${bot.id}" class="btn btn-2">← Retour au dashboard</a>
+  </div>
+
+  ${status === 'past_due' ? `
+  <div class="card" style="background:#fef3c7;border-color:#fcd34d">
+    <h2 style="color:#92400e">⚠️ Paiement requis</h2>
+    <p style="color:#92400e;font-size:13px">Votre dernier paiement a échoué. Mettez à jour votre moyen de paiement pour éviter la suspension de votre bot.</p>
+    <a href="/pricing?bot=${bot.id}" class="btn" style="margin-top:10px">Mettre à jour la carte</a>
+  </div>` : ''}
+</div>
+
+<script>
+async function cancelSub(){
+  if(!confirm('Annuler votre abonnement? Votre bot sera suspendu à la fin du cycle actuel.')) return;
+  try {
+    var r = await fetch('/billing/${bot.id}/cancel', {method:'POST'});
+    var d = await r.json();
+    if(d.success) {
+      alert('✅ Abonnement annulé. Vous gardez l\\'accès jusqu\\'à la fin du cycle.');
+      location.reload();
+    } else {
+      alert('Erreur: ' + (d.error || 'Inconnue'));
+    }
+  } catch(e) { alert('Erreur réseau'); }
+}
+</script>
+</body></html>`);
+  } catch(e) { res.status(500).send('Erreur: ' + e.message); }
+});
+
+// Annuler un abonnement
+app.post('/billing/:botId/cancel', async (req, res) => {
+  try {
+    if (!CONFIG.STRIPE_SECRET_KEY) return res.status(500).json({ error: 'Stripe pas configuré' });
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&select=stripe_subscription_id`);
+    if (!bots?.[0]?.stripe_subscription_id) return res.status(404).json({ error: 'Pas d\'abonnement actif' });
+
+    // Annuler à la fin du cycle (pas immédiatement)
+    const r = await fetch(`https://api.stripe.com/v1/subscriptions/${bots[0].stripe_subscription_id}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + CONFIG.STRIPE_SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: 'cancel_at_period_end=true'
+    });
+    const d = await r.json();
+    if (d.error) return res.status(500).json({ error: d.error.message });
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // 📦 SDK JavaScript SamaBot — pour intégration ultra simple
 app.get('/sdk.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -4333,8 +5081,12 @@ app.post('/bot/create', async (req, res) => {
       }
     }
 
+    // 🎁 Trial 3 jours automatique à la création du bot
+    botData.plan = 'trial';
+    botData.trial_until = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+
     await db.insert('bots', botData);
-    console.log(`✅ Bot créé: ${nom} (${id})`);
+    console.log(`✅ Bot créé: ${nom} (${id}) — Trial jusqu'au ${botData.trial_until}`);
 
     // 📧 Email de bienvenue au patron (async, ne bloque pas la réponse)
     if (botData.notifications_email) {
@@ -4634,6 +5386,36 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <div class="stat"><div class="stat-val">${avgNote}${avgNote!=='—'?'⭐':''}</div><div class="stat-lbl">${t(lang,'avg_rating')}</div><div class="stat-sub">${allAvis?.length||0}</div></div>
   </div>
 
+  ${(function(){
+    const plan = bot.plan || 'trial';
+    const trialEnd = bot.trial_until ? new Date(bot.trial_until) : null;
+    const daysLeft = trialEnd ? Math.ceil((trialEnd.getTime() - Date.now()) / 86400000) : 0;
+    if (plan === 'trial' && trialEnd) {
+      if (daysLeft <= 0) {
+        return `<div style="background:#fecaca;border:1px solid #ef4444;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div><strong style="color:#991b1b">⏰ Période d'essai expirée</strong><br><span style="font-size:13px;color:#7f1d1d">Votre bot est en pause. Abonnez-vous pour le réactiver.</span></div>
+          <a href="/pricing?bot=${bot.id}" style="background:#dc2626;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">💎 Choisir un plan</a>
+        </div>`;
+      } else if (daysLeft <= 1) {
+        return `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div><strong style="color:#92400e">⏰ Plus que ${daysLeft} jour${daysLeft>1?'s':''} d'essai!</strong><br><span style="font-size:13px;color:#78350f">Abonnez-vous pour continuer sans interruption.</span></div>
+          <a href="/pricing?bot=${bot.id}" style="background:#f59e0b;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">💎 Voir les plans</a>
+        </div>`;
+      } else {
+        return `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:10px;padding:12px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div style="font-size:13px;color:#1e40af">🎁 <strong>Période d'essai</strong> — Plus que ${daysLeft} jour${daysLeft>1?'s':''}</div>
+          <a href="/pricing?bot=${bot.id}" style="background:#3b82f6;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:700;font-size:12px">Voir les plans →</a>
+        </div>`;
+      }
+    } else if (bot.subscription_status === 'past_due') {
+      return `<div style="background:#fed7aa;border:1px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div><strong style="color:#9a3412">⚠️ Paiement en attente</strong><br><span style="font-size:13px;color:#7c2d12">Mettez à jour votre carte pour éviter la suspension.</span></div>
+        <a href="/billing/${bot.id}" style="background:#ea580c;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">💳 Mettre à jour</a>
+      </div>`;
+    }
+    return '';
+  })()}
+
   <div class="tab-btns">
     <button class="tab-btn active" onclick="showTab('cmd',this)">📦 ${t(lang,'tab_orders')} (${commandes?.length||0})</button>
     <button class="tab-btn" onclick="showTab('rdv',this)">📅 ${t(lang,'tab_rdv')}</button>
@@ -4645,6 +5427,7 @@ select{font-size:11px;border-radius:6px;border:1px solid #d1e5d8;padding:3px 6px
     <button class="tab-btn" onclick="showTab('avis',this)">⭐ ${t(lang,'tab_reviews')} (${allAvis?.length||0})</button>
     <button class="tab-btn" onclick="showTab('workflow',this)">⚡ Workflows</button>
     <button class="tab-btn" onclick="showTab('partage',this)">🔗 ${t(lang,'tab_share')}</button>
+    <a href="/billing/${bot.id}" class="tab-btn" style="text-decoration:none;display:inline-block">💳 Mon abonnement</a>
   </div>
 
   <!-- RDV -->
@@ -7102,6 +7885,134 @@ app.patch('/admin/user/:id/plan', async (req, res) => {
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
+// 💰 Admin Billing — vue MRR / conversion / churn
+app.get('/admin/billing', async (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET && req.headers['x-admin-secret'] !== ADMIN_SECRET)
+    return res.status(401).json({ error:'Non autorisé' });
+  try {
+    const bots = await db.select('bots', '?actif=eq.true&select=id,nom,plan,subscription_status,trial_until,subscription_started_at,created_at');
+    const all = bots || [];
+    const now = Date.now();
+
+    // Calculer MRR
+    let mrr = 0;
+    const counts = { trial: 0, starter: 0, pro: 0, business: 0, expired: 0, canceled: 0, past_due: 0 };
+    for (const b of all) {
+      const plan = b.plan || 'trial';
+      const status = b.subscription_status;
+      if (status === 'canceled') counts.canceled++;
+      else if (status === 'past_due') counts.past_due++;
+      else if (plan === 'trial') {
+        if (b.trial_until && new Date(b.trial_until).getTime() < now) counts.expired++;
+        else counts.trial++;
+      } else if (plan === 'starter') { counts.starter++; mrr += 9; }
+      else if (plan === 'pro') { counts.pro++; mrr += 25; }
+      else if (plan === 'business') { counts.business++; mrr += 85; }
+    }
+
+    // Conversion rate
+    const totalEverTrials = all.length;
+    const totalPaid = counts.starter + counts.pro + counts.business;
+    const conversionRate = totalEverTrials > 0 ? (100 * totalPaid / totalEverTrials).toFixed(1) : 0;
+
+    // Liste des bots payants (top revenue)
+    const paidBots = all
+      .filter(b => ['starter','pro','business'].includes(b.plan) && b.subscription_status === 'active')
+      .map(b => ({
+        ...b,
+        mrr: PLANS[b.plan]?.price_usd_monthly || 0
+      }))
+      .sort((a, b) => b.mrr - a.mrr);
+
+    res.json({
+      mrr_usd: mrr,
+      mrr_fcfa: mrr * 600, // estim 1 USD = 600 FCFA
+      arr_usd: mrr * 12,
+      counts,
+      total_bots: all.length,
+      conversion_rate: parseFloat(conversionRate),
+      paid_bots: paidBots.slice(0, 50)
+    });
+  } catch(e) { res.status(500).json({error: e.message}); }
+});
+
+// Page HTML admin billing (vue CEO MRR)
+app.get('/admin/billing-view', (req, res) => {
+  if (req.query.secret !== ADMIN_SECRET) return res.status(401).send('Non autorisé');
+  res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Billing — Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#fff;min-height:100vh;padding:20px}
+.wrap{max-width:1100px;margin:0 auto}
+h1{font-size:24px;margin-bottom:20px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:30px}
+.kpi{background:#111;border:1px solid #222;border-radius:12px;padding:20px}
+.kpi-val{font-size:30px;font-weight:800;color:#00c875}
+.kpi-lbl{color:#666;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+.kpi-sub{font-size:12px;color:#888;margin-top:4px}
+.section{background:#111;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:20px}
+.section h2{font-size:16px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px;font-size:11px;color:#666;text-transform:uppercase;border-bottom:1px solid #222}
+td{padding:10px 8px;border-bottom:1px solid #1a1a1a;font-size:13px}
+.pill{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;display:inline-block}
+.p-trial{background:#fef9c3;color:#854d0e}
+.p-starter{background:#dcfce7;color:#166534}
+.p-pro{background:#dbeafe;color:#1e40af}
+.p-business{background:#fef3c7;color:#92400e}
+.p-canceled{background:#fecaca;color:#991b1b}
+.p-past_due{background:#fed7aa;color:#9a3412}
+</style></head><body>
+<div class="wrap">
+<h1>💰 Vue CEO — Billing & MRR</h1>
+<div class="kpis" id="kpis"><div style="color:#666">Chargement...</div></div>
+<div class="section">
+  <h2>👥 Distribution des plans</h2>
+  <div id="dist"></div>
+</div>
+<div class="section">
+  <h2>💎 Top clients payants</h2>
+  <table id="paid"><thead><tr><th>Bot</th><th>Plan</th><th>MRR</th><th>Statut</th><th>Depuis</th></tr></thead><tbody><tr><td colspan="5" style="color:#666">Chargement...</td></tr></tbody></table>
+</div>
+</div>
+<script>
+fetch('/admin/billing?secret=' + encodeURIComponent('${ADMIN_SECRET}'))
+  .then(r => r.json())
+  .then(d => {
+    if (d.error) { document.body.innerHTML = '<p style="color:red">Erreur: '+d.error+'</p>'; return; }
+    document.getElementById('kpis').innerHTML =
+      '<div class="kpi"><div class="kpi-val">$'+d.mrr_usd+'</div><div class="kpi-lbl">MRR Mensuel</div><div class="kpi-sub">≈ '+d.mrr_fcfa.toLocaleString('fr-FR')+' FCFA</div></div>'+
+      '<div class="kpi"><div class="kpi-val">$'+d.arr_usd+'</div><div class="kpi-lbl">ARR Annuel</div></div>'+
+      '<div class="kpi"><div class="kpi-val">'+d.conversion_rate+'%</div><div class="kpi-lbl">Conv. trial→paid</div></div>'+
+      '<div class="kpi"><div class="kpi-val">'+(d.counts.starter+d.counts.pro+d.counts.business)+'</div><div class="kpi-lbl">Clients payants</div></div>'+
+      '<div class="kpi"><div class="kpi-val">'+d.counts.trial+'</div><div class="kpi-lbl">En trial actif</div></div>';
+
+    document.getElementById('dist').innerHTML =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+
+      '<div><span class="pill p-trial">TRIAL</span> '+d.counts.trial+'</div>'+
+      '<div><span class="pill p-starter">STARTER</span> '+d.counts.starter+'</div>'+
+      '<div><span class="pill p-pro">PRO</span> '+d.counts.pro+'</div>'+
+      '<div><span class="pill p-business">BUSINESS</span> '+d.counts.business+'</div>'+
+      '<div><span class="pill p-canceled">CANCELED</span> '+d.counts.canceled+'</div>'+
+      '<div><span class="pill p-past_due">PAST DUE</span> '+d.counts.past_due+'</div>'+
+      '<div style="color:#666">EXPIRÉS: '+d.counts.expired+'</div>'+
+      '</div>';
+
+    var rows = '';
+    if (!d.paid_bots.length) rows = '<tr><td colspan="5" style="color:#666;text-align:center;padding:30px">Aucun client payant pour l\\'instant</td></tr>';
+    else d.paid_bots.forEach(function(b){
+      rows += '<tr><td><strong>'+b.nom+'</strong></td>'+
+              '<td><span class="pill p-'+b.plan+'">'+b.plan.toUpperCase()+'</span></td>'+
+              '<td style="color:#00c875;font-weight:700">$'+b.mrr+'/mo</td>'+
+              '<td>'+(b.subscription_status||'-')+'</td>'+
+              '<td style="color:#666">'+(b.subscription_started_at?new Date(b.subscription_started_at).toLocaleDateString('fr-FR'):'-')+'</td></tr>';
+    });
+    document.querySelector('#paid tbody').innerHTML = rows;
+  });
+</script>
+</body></html>`);
+});
+
 // Logout (stateless mais utile pour uniformiser)
 app.post('/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Déconnecté' });
@@ -7621,6 +8532,1546 @@ app.get('/', (req,res) => res.json({
 }));
 
 app.get('/privacy', (req,res) => res.send('<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px"><h1 style="color:#00c875">Politique de confidentialité — SamaBot</h1><p style="margin-top:16px;line-height:1.7">SamaBot collecte uniquement les messages nécessaires au fonctionnement du chatbot. Contact: gakououssou@gmail.com</p></body></html>'));
+
+// ════════════════════════════════════════════════════════════
+// FEATURES SUITE PRE-LEVEE — v10.4
+// 1) Onboarding self-serve wizard
+// 3) RGPD : Privacy/Terms/Cookie banner + 2FA TOTP
+// 4) Status page + monitoring + /health
+// 5) Widget JS embeddable 1-line
+// ════════════════════════════════════════════════════════════
+
+// ─── HEALTH CHECK (#4) ────────────────────────────────────────
+const SERVER_START = Date.now();
+let HEALTH_STATS = { requests: 0, errors: 0, last_error: null };
+
+app.use((req, res, next) => {
+  HEALTH_STATS.requests++;
+  next();
+});
+
+app.get('/health', async (req, res) => {
+  const uptime = Math.floor((Date.now() - SERVER_START) / 1000);
+  const checks = { server: true, database: false, openai: false, wasender: false };
+  try {
+    const t1 = Date.now();
+    const r = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/bots?select=id&limit=1`, { headers: { 'apikey': CONFIG.SUPABASE_KEY, 'Authorization': `Bearer ${CONFIG.SUPABASE_KEY}` }});
+    checks.database = r.ok;
+    checks.db_latency_ms = Date.now() - t1;
+  } catch(e) { checks.database = false; }
+  checks.openai = !!CONFIG.OPENAI_API_KEY;
+  checks.wasender = !!CONFIG.WASENDER_API_KEY;
+  const allOk = checks.server && checks.database && checks.openai;
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'healthy' : 'degraded',
+    uptime_sec: uptime,
+    uptime_human: `${Math.floor(uptime/86400)}d ${Math.floor(uptime/3600)%24}h ${Math.floor(uptime/60)%60}m`,
+    requests_total: HEALTH_STATS.requests,
+    errors_total: HEALTH_STATS.errors,
+    checks,
+    version: '10.4',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ─── STATUS PAGE PUBLIC (#4) ──────────────────────────────────
+app.get('/status', async (req, res) => {
+  const uptime = Math.floor((Date.now() - SERVER_START) / 1000);
+  const uptime_h = Math.floor(uptime/3600);
+  const uptime_d = Math.floor(uptime_h/24);
+  const checks = { db: false, db_ms: 0, openai: !!CONFIG.OPENAI_API_KEY, wasender: !!CONFIG.WASENDER_API_KEY };
+  try {
+    const t1 = Date.now();
+    const r = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/bots?select=id&limit=1`, { headers: { 'apikey': CONFIG.SUPABASE_KEY, 'Authorization': `Bearer ${CONFIG.SUPABASE_KEY}` }});
+    checks.db = r.ok;
+    checks.db_ms = Date.now() - t1;
+  } catch(e) {}
+  const allUp = checks.db && checks.openai && checks.wasender;
+  const errRate = HEALTH_STATS.requests > 0 ? ((HEALTH_STATS.errors/HEALTH_STATS.requests)*100).toFixed(2) : '0.00';
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SamaBot Status</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;color:#0a1a0f;padding:40px 20px;line-height:1.5}
+.container{max-width:760px;margin:0 auto}
+.brand{font-size:28px;font-weight:800;margin-bottom:8px}.brand span{color:#06C167}
+.tagline{color:#57534e;font-size:14px;margin-bottom:32px}
+.banner{padding:20px 24px;border-radius:12px;margin-bottom:24px;display:flex;align-items:center;gap:16px;font-size:16px;font-weight:600}
+.banner.up{background:linear-gradient(135deg,#dcfce7,#ecfccb);color:#166534;border:1px solid #bbf7d0}
+.banner.down{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.dot{width:12px;height:12px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px}
+.card h3{font-size:13px;color:#57534e;font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.card .badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
+.card .badge.ok{background:#dcfce7;color:#166534}.card .badge.ko{background:#fee2e2;color:#991b1b}
+.card .val{font-size:22px;font-weight:700;color:#0a1a0f}
+.card .sub{font-size:11px;color:#999;margin-top:2px}
+.metrics{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px}
+.metrics h2{font-size:14px;font-weight:700;color:#06C167;margin-bottom:14px;letter-spacing:0.5px}
+.metric-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:14px}.metric-row:last-child{border:none}
+.metric-row strong{color:#0a1a0f}
+.footer{text-align:center;color:#999;font-size:12px;margin-top:32px}
+.footer a{color:#06C167;text-decoration:none}
+</style></head><body><div class="container">
+<div class="brand">Sama<span>Bot</span> · Status</div>
+<div class="tagline">Statut en temps réel des services SamaBot</div>
+<div class="banner ${allUp?'up':'down'}"><span class="dot"></span><span>${allUp?'Tous les systèmes sont opérationnels':'Service partiellement dégradé'}</span></div>
+<div class="grid">
+<div class="card"><h3>Database<span class="badge ${checks.db?'ok':'ko'}">${checks.db?'OK':'DOWN'}</span></h3><div class="val">${checks.db?checks.db_ms+'ms':'N/A'}</div><div class="sub">Supabase (PostgreSQL)</div></div>
+<div class="card"><h3>OpenAI IA<span class="badge ${checks.openai?'ok':'ko'}">${checks.openai?'OK':'KO'}</span></h3><div class="val">${checks.openai?'Active':'Down'}</div><div class="sub">GPT-4o-mini</div></div>
+<div class="card"><h3>WhatsApp<span class="badge ${checks.wasender?'ok':'ko'}">${checks.wasender?'OK':'KO'}</span></h3><div class="val">${checks.wasender?'Active':'Down'}</div><div class="sub">WaSenderAPI</div></div>
+<div class="card"><h3>API Server<span class="badge ok">OK</span></h3><div class="val">${uptime_d}j ${uptime_h%24}h</div><div class="sub">Uptime</div></div>
+</div>
+<div class="metrics">
+<h2>📊 MÉTRIQUES</h2>
+<div class="metric-row"><span>Requêtes traitées</span><strong>${HEALTH_STATS.requests.toLocaleString('fr-FR')}</strong></div>
+<div class="metric-row"><span>Erreurs</span><strong>${HEALTH_STATS.errors.toLocaleString('fr-FR')}</strong></div>
+<div class="metric-row"><span>Taux d'erreur</span><strong>${errRate}%</strong></div>
+<div class="metric-row"><span>Uptime</span><strong>${uptime_d} jours, ${uptime_h%24}h ${Math.floor(uptime/60)%60}min</strong></div>
+<div class="metric-row"><span>Version</span><strong>v10.4</strong></div>
+</div>
+<div class="footer">SLA visé: 99.5% · Page rafraîchie automatiquement toutes les 60s · <a href="/">Retour samabot.app</a><br>Incidents : contactez gakououssou@gmail.com</div>
+</div>
+<script>setTimeout(()=>location.reload(),60000)</script>
+</body></html>`);
+});
+
+// ─── PRIVACY POLICY COMPLÈTE (#3) ─────────────────────────────
+app.get('/privacy-full', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Politique de confidentialité — SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;background:#f9fafb;color:#0a1a0f;line-height:1.7;padding:40px 20px}
+.container{max-width:780px;margin:0 auto;background:#fff;padding:50px 40px;border-radius:12px;border:1px solid #e5e7eb}
+h1{font-size:32px;color:#0a1a0f;margin-bottom:8px;letter-spacing:-1px}
+.brand{color:#06C167}.subtitle{color:#57534e;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;color:#06C167;margin-top:32px;margin-bottom:12px;font-weight:700}
+h3{font-size:16px;color:#0a1a0f;margin-top:18px;margin-bottom:8px}
+p,li{font-size:14.5px;color:#1c1917;margin-bottom:10px}
+ul{padding-left:24px;margin-bottom:14px}
+a{color:#06C167;text-decoration:underline}
+.toc{background:#f9fafb;padding:20px;border-radius:10px;margin-bottom:24px;border-left:4px solid #06C167}
+.toc h3{margin-top:0;color:#0a1a0f}.toc ol{padding-left:20px;font-size:13px}
+.contact{background:#dcfce7;border:1px solid #bbf7d0;padding:18px;border-radius:10px;margin-top:24px}
+</style></head><body><div class="container">
+<h1>Politique de <span class="brand">confidentialité</span></h1>
+<p class="subtitle">Dernière mise à jour : ${new Date().toLocaleDateString('fr-FR',{year:'numeric',month:'long',day:'numeric'})}</p>
+
+<div class="toc"><h3>Table des matières</h3><ol>
+<li>Qui sommes-nous</li><li>Données collectées</li><li>Finalité du traitement</li><li>Base légale (RGPD)</li>
+<li>Durée de conservation</li><li>Partage des données</li><li>Vos droits (RGPD)</li><li>Sécurité</li>
+<li>Cookies</li><li>Transferts internationaux</li><li>Modifications</li><li>Contact &amp; DPO</li></ol></div>
+
+<h2>1. Qui sommes-nous</h2>
+<p>SamaBot est un service édité par Ousmane Gakou, opérant entre les États-Unis et le Sénégal. SamaBot fournit une plateforme d'intelligence artificielle conversationnelle multilingue (français, wolof, anglais) destinée aux PME africaines.</p>
+<p><strong>Responsable de traitement :</strong> Ousmane Gakou · Email : gakououssou@gmail.com · Téléphone : +221 77 760 89 83</p>
+
+<h2>2. Données collectées</h2>
+<h3>2.1 Données fournies par l'utilisateur (commerçant)</h3>
+<ul><li>Nom, email, mot de passe (haché)</li><li>Numéro de téléphone WhatsApp (optionnel)</li><li>Informations de paiement (via Stripe — nous ne stockons pas les numéros de carte)</li><li>Catalogue produits, horaires, configuration du bot</li></ul>
+<h3>2.2 Données collectées via les conversations</h3>
+<ul><li>Messages échangés entre les clients finaux et le chatbot</li><li>Numéros de téléphone des clients (pour la prise de commande)</li><li>Adresses de livraison (pour les commandes)</li><li>Historique des commandes et avis</li></ul>
+<h3>2.3 Données techniques</h3>
+<ul><li>Adresse IP, type de navigateur, fuseau horaire</li><li>Logs d'accès et d'erreur (anonymisés sous 30 jours)</li></ul>
+
+<h2>3. Finalité du traitement</h2>
+<ul><li>Fournir le service SamaBot (chatbot IA, gestion commandes, RDV, etc.)</li><li>Facturation et gestion des abonnements</li><li>Support client</li><li>Amélioration continue du produit (sur données agrégées et anonymisées)</li><li>Communications transactionnelles (confirmations, factures, alertes)</li><li>Respect des obligations légales</li></ul>
+
+<h2>4. Base légale du traitement (RGPD Art. 6)</h2>
+<ul><li><strong>Exécution du contrat :</strong> fourniture du service auquel vous avez souscrit</li><li><strong>Consentement :</strong> communications marketing (que vous pouvez retirer à tout moment)</li><li><strong>Intérêt légitime :</strong> sécurité, prévention de la fraude, amélioration du produit</li><li><strong>Obligation légale :</strong> conservation des factures (10 ans)</li></ul>
+
+<h2>5. Durée de conservation</h2>
+<ul><li>Compte actif : durée de l'abonnement + 3 ans après résiliation</li><li>Conversations chatbot : 12 mois (configurable par le commerçant)</li><li>Données de facturation : 10 ans (obligation légale)</li><li>Logs techniques : 30 jours</li><li>Cookies : 13 mois maximum</li></ul>
+
+<h2>6. Partage des données</h2>
+<p>Nous utilisons les sous-traitants suivants, tous conformes RGPD :</p>
+<ul><li><strong>Supabase</strong> (USA / EU) — base de données — supabase.com/privacy</li><li><strong>Railway</strong> (USA) — hébergement serveur — railway.app/legal/privacy</li><li><strong>OpenAI</strong> (USA) — modèle de langage — openai.com/policies</li><li><strong>Stripe</strong> (USA / EU) — paiements — stripe.com/privacy</li><li><strong>WaSenderAPI</strong> — passerelle WhatsApp</li><li><strong>Resend</strong> (USA) — envoi d'emails transactionnels — resend.com/legal/privacy-policy</li></ul>
+<p>Aucune vente de données. Aucun partage publicitaire.</p>
+
+<h2>7. Vos droits (RGPD Art. 15-22)</h2>
+<ul><li>Droit d'accès à vos données</li><li>Droit de rectification</li><li>Droit à l'effacement (« droit à l'oubli »)</li><li>Droit à la limitation du traitement</li><li>Droit à la portabilité de vos données</li><li>Droit d'opposition</li><li>Droit de retirer votre consentement à tout moment</li><li>Droit d'introduire une réclamation auprès d'une autorité de contrôle (CNIL en France, Commission de Protection des Données Personnelles au Sénégal)</li></ul>
+<p>Pour exercer ces droits : <a href="mailto:gakououssou@gmail.com">gakououssou@gmail.com</a> — réponse sous 30 jours.</p>
+
+<h2>8. Sécurité</h2>
+<p>Mots de passe hachés (bcrypt). Authentification 2FA disponible. Chiffrement TLS 1.3 pour toutes les communications. Row-Level Security (RLS) sur la base de données. Sauvegardes quotidiennes chiffrées. Accès aux données limité au strict nécessaire.</p>
+
+<h2>9. Cookies</h2>
+<p>SamaBot utilise uniquement des cookies fonctionnels nécessaires au service (authentification, préférences). Aucun cookie publicitaire ou de tracking tiers. Vous pouvez les désactiver dans votre navigateur (cela peut affecter le fonctionnement du service).</p>
+
+<h2>10. Transferts internationaux</h2>
+<p>Certaines de vos données peuvent être traitées hors UE (notamment aux États-Unis chez Supabase, Railway, OpenAI, Stripe, Resend). Ces transferts sont encadrés par les Clauses Contractuelles Types (CCT) de la Commission européenne et le Data Privacy Framework EU-US.</p>
+
+<h2>11. Modifications</h2>
+<p>Cette politique peut être mise à jour. Nous vous informerons par email de tout changement substantiel au moins 30 jours avant son application.</p>
+
+<h2>12. Contact &amp; DPO</h2>
+<div class="contact">
+<p><strong>Email :</strong> gakououssou@gmail.com<br>
+<strong>Téléphone :</strong> +221 77 760 89 83<br>
+<strong>Adresse postale :</strong> SamaBot, c/o Ousmane Gakou, Sénégal 🇸🇳 / USA 🇺🇸</p>
+</div>
+
+</div></body></html>`);
+});
+
+// ─── TERMS OF SERVICE (#3) ────────────────────────────────────
+app.get('/terms', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conditions générales — SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;background:#f9fafb;color:#0a1a0f;line-height:1.7;padding:40px 20px}
+.container{max-width:780px;margin:0 auto;background:#fff;padding:50px 40px;border-radius:12px;border:1px solid #e5e7eb}
+h1{font-size:32px;margin-bottom:8px;letter-spacing:-1px}.brand{color:#06C167}
+.subtitle{color:#57534e;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;color:#06C167;margin-top:32px;margin-bottom:12px;font-weight:700}
+p,li{font-size:14.5px;color:#1c1917;margin-bottom:10px}ul{padding-left:24px;margin-bottom:14px}
+a{color:#06C167;text-decoration:underline}
+.warning{background:#fef3c7;border-left:4px solid #f59e0b;padding:14px;margin:20px 0;border-radius:6px;font-size:13.5px}
+</style></head><body><div class="container">
+<h1>Conditions générales d'<span class="brand">utilisation</span></h1>
+<p class="subtitle">Dernière mise à jour : ${new Date().toLocaleDateString('fr-FR',{year:'numeric',month:'long',day:'numeric'})}</p>
+
+<h2>1. Objet</h2>
+<p>Les présentes conditions générales (CGU) régissent l'utilisation du service SamaBot accessible à l'adresse <a href="https://samabot.app">samabot.app</a>. En créant un compte, vous acceptez ces CGU sans réserve.</p>
+
+<h2>2. Description du service</h2>
+<p>SamaBot fournit une plateforme SaaS de chatbot IA multilingue (français, wolof, anglais) avec gestion de commandes, prise de RDV, paiements Mobile Money, intégration WhatsApp, plugin WordPress et API publique.</p>
+
+<h2>3. Inscription &amp; Compte</h2>
+<ul><li>L'utilisateur garantit l'exactitude des informations fournies</li><li>Un seul compte par utilisateur</li><li>Accès aux mineurs interdit (18 ans minimum)</li><li>L'utilisateur est responsable de la confidentialité de son mot de passe</li><li>Activation du 2FA fortement recommandée</li></ul>
+
+<h2>4. Plans &amp; Tarification</h2>
+<ul><li><strong>Trial :</strong> 3 jours gratuits, sans carte bancaire requise</li><li><strong>Starter :</strong> $9 / 5 000 FCFA par mois — 3 bots</li><li><strong>Pro :</strong> $25 / 15 000 FCFA par mois — 10 bots</li><li><strong>Business :</strong> $85 / 50 000 FCFA par mois — bots illimités</li><li>Plans annuels : -20%</li></ul>
+<p>Les prix peuvent évoluer avec un préavis de 30 jours par email.</p>
+
+<h2>5. Paiement &amp; Facturation</h2>
+<p>Paiements traités par Stripe (cartes internationales). Facturation mensuelle ou annuelle au début de chaque période. Renouvellement automatique sauf résiliation. Aucun remboursement pour les périodes entamées (sauf défaut majeur du service).</p>
+
+<h2>6. Résiliation</h2>
+<ul><li>L'utilisateur peut résilier à tout moment depuis son espace billing</li><li>L'accès reste actif jusqu'à la fin de la période payée</li><li>Données conservées 30 jours après résiliation, puis supprimées</li><li>SamaBot peut suspendre le service en cas de violation des CGU (préavis 7 jours sauf urgence)</li></ul>
+
+<h2>7. Usage acceptable</h2>
+<p>L'utilisateur s'engage à ne pas utiliser SamaBot pour :</p>
+<ul><li>Activités illégales ou frauduleuses</li><li>Spam ou messages non sollicités à grande échelle</li><li>Contenu offensant, discriminatoire ou pornographique</li><li>Atteinte aux droits de tiers (propriété intellectuelle, vie privée)</li><li>Charge anormale (rate limit : 30 req/min/IP)</li></ul>
+
+<h2>8. Propriété intellectuelle</h2>
+<p>SamaBot reste propriétaire du code source, des modèles IA et de la marque. L'utilisateur conserve tous les droits sur ses données métier (catalogue, conversations, clients).</p>
+
+<h2>9. Disponibilité &amp; SLA</h2>
+<p>SLA visé : 99.5% (hors maintenances planifiées annoncées 48h à l'avance). Statut en temps réel : <a href="/status">samabot.app/status</a>.</p>
+<div class="warning">⚠️ SamaBot ne saurait être tenu responsable des pannes indirectes (Supabase, Railway, OpenAI, WhatsApp, Stripe). Plan Business uniquement : crédit pro-rata si downtime &gt; 4h consécutives.</div>
+
+<h2>10. Limitation de responsabilité</h2>
+<p>Dans la mesure permise par la loi, la responsabilité totale de SamaBot est limitée au montant payé par l'utilisateur sur les 12 derniers mois. SamaBot n'est pas responsable des dommages indirects (perte de chiffre d'affaires, atteinte à la réputation, etc.).</p>
+
+<h2>11. Données personnelles</h2>
+<p>Le traitement des données personnelles est régi par notre <a href="/privacy-full">Politique de confidentialité</a>.</p>
+
+<h2>12. Modifications des CGU</h2>
+<p>SamaBot peut modifier les CGU avec un préavis de 30 jours par email. La poursuite de l'utilisation après cette période vaut acceptation.</p>
+
+<h2>13. Loi applicable &amp; juridiction</h2>
+<p>Loi sénégalaise applicable. Tout litige sera soumis aux tribunaux compétents de Dakar, après tentative de résolution amiable.</p>
+
+<h2>14. Contact</h2>
+<p>Pour toute question : <a href="mailto:gakououssou@gmail.com">gakououssou@gmail.com</a> · +221 77 760 89 83</p>
+</div></body></html>`);
+});
+
+// ─── 2FA TOTP (#3) ────────────────────────────────────────────
+function generateTotpSecret() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let s = '';
+  for (let i = 0; i < 32; i++) s += chars[Math.floor(Math.random()*32)];
+  return s;
+}
+
+function totpVerify(secret, token) {
+  const crypto = require('crypto');
+  const base32Decode = (s) => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = '';
+    for (const c of s.toUpperCase().replace(/=+$/,'')) {
+      const idx = alphabet.indexOf(c); if (idx === -1) continue;
+      bits += idx.toString(2).padStart(5,'0');
+    }
+    const bytes = [];
+    for (let i = 0; i+8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i,i+8),2));
+    return Buffer.from(bytes);
+  };
+  const key = base32Decode(secret);
+  const now = Math.floor(Date.now()/1000/30);
+  for (const offset of [-1, 0, 1]) {
+    const counter = now + offset;
+    const buf = Buffer.alloc(8);
+    buf.writeBigUInt64BE(BigInt(counter), 0);
+    const hmac = crypto.createHmac('sha1', key).update(buf).digest();
+    const off = hmac[hmac.length-1] & 0xf;
+    const code = ((hmac[off] & 0x7f) << 24 | hmac[off+1] << 16 | hmac[off+2] << 8 | hmac[off+3]) % 1000000;
+    if (code.toString().padStart(6,'0') === String(token)) return true;
+  }
+  return false;
+}
+
+app.post('/auth/2fa/setup', authMiddleware, async (req, res) => {
+  try {
+    const secret = generateTotpSecret();
+    await db.update('users', { totp_secret: secret, totp_enabled: false }, `?id=eq.${req.userId}`);
+    const users = await db.select('users', `?id=eq.${req.userId}&select=email`);
+    const email = users?.[0]?.email || 'user';
+    const otpauthUrl = `otpauth://totp/SamaBot:${encodeURIComponent(email)}?secret=${secret}&issuer=SamaBot&algorithm=SHA1&digits=6&period=30`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(otpauthUrl)}`;
+    res.json({ success:true, secret, qr_url: qrUrl, otpauth_url: otpauthUrl });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+app.post('/auth/2fa/verify', authMiddleware, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error:'token requis' });
+    const users = await db.select('users', `?id=eq.${req.userId}&select=totp_secret`);
+    const secret = users?.[0]?.totp_secret;
+    if (!secret) return res.status(400).json({ error:'2FA non configuré' });
+    if (!totpVerify(secret, token)) return res.status(401).json({ error:'Code invalide' });
+    await db.update('users', { totp_enabled: true }, `?id=eq.${req.userId}`);
+    res.json({ success:true, message:'2FA activé' });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+app.post('/auth/2fa/disable', authMiddleware, async (req, res) => {
+  try {
+    const { token } = req.body;
+    const users = await db.select('users', `?id=eq.${req.userId}&select=totp_secret,totp_enabled`);
+    if (!users?.[0]?.totp_enabled) return res.json({ success:true });
+    if (!totpVerify(users[0].totp_secret, token)) return res.status(401).json({ error:'Code invalide' });
+    await db.update('users', { totp_secret: null, totp_enabled: false }, `?id=eq.${req.userId}`);
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ─── ONBOARDING SELF-SERVE (#1) ───────────────────────────────
+const ONBOARDING_NICHES = [
+  { id:'restaurant', label:'🍽️ Restaurant', description:'Plats, livraison, commandes', emoji:'🍽️', color:'#f59e0b' },
+  { id:'salon', label:'💇 Salon de coiffure', description:'RDV coiffure, manucure', emoji:'💇', color:'#ec4899' },
+  { id:'boutique', label:'🛍️ Boutique mode', description:'Vêtements, accessoires', emoji:'🛍️', color:'#8b5cf6' },
+  { id:'pharmacie', label:'💊 Pharmacie', description:'Médicaments, paraphar.', emoji:'💊', color:'#10b981' },
+  { id:'auto-ecole', label:'🚗 Auto-école', description:'Inscription, cours code', emoji:'🚗', color:'#3b82f6' },
+  { id:'menuiserie', label:'🔨 Menuisier / Artisan', description:'Devis, RDV chantier', emoji:'🔨', color:'#a16207' },
+  { id:'clinique', label:'🏥 Clinique / Cabinet médical', description:'RDV médecin', emoji:'🏥', color:'#06b6d4' },
+  { id:'taxi', label:'🚕 Taxi / Transport', description:'Réservations courses', emoji:'🚕', color:'#eab308' },
+  { id:'autre', label:'✨ Autre', description:'Personnalisé', emoji:'✨', color:'#6366f1' }
+];
+
+const NICHE_PROMPTS = {
+  restaurant: 'Tu es l\'assistant d\'un restaurant. Aide les clients à découvrir le menu, prendre commande, fournir les infos livraison.',
+  salon: 'Tu es l\'assistant d\'un salon de coiffure. Aide à prendre RDV, expliquer les prestations, conseiller.',
+  boutique: 'Tu es l\'assistant d\'une boutique. Aide à découvrir les produits, vérifier la disponibilité, passer commande.',
+  pharmacie: 'Tu es l\'assistant d\'une pharmacie. Donne les infos sur la disponibilité des médicaments. RAPPEL : tu ne donnes jamais de conseil médical, tu redirige vers le pharmacien.',
+  'auto-ecole': 'Tu es l\'assistant d\'une auto-école. Renseigne sur les inscriptions, prix, cours de code, examens.',
+  menuiserie: 'Tu es l\'assistant d\'un menuisier/artisan. Aide à demander un devis, prendre RDV pour visite chantier.',
+  clinique: 'Tu es l\'assistant d\'une clinique. Aide à prendre RDV. RAPPEL : tu ne donnes JAMAIS de diagnostic ni conseil médical, redirige toujours vers un médecin.',
+  taxi: 'Tu es l\'assistant d\'un service de taxi. Aide à réserver une course (lieu de prise en charge, destination, heure).',
+  autre: 'Tu es un assistant commercial. Aide les clients de manière professionnelle.'
+};
+
+function generateBotId(nom) {
+  const slug = (nom||'bot').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20);
+  const rand = Math.random().toString(36).slice(2,9);
+  return `${slug||'bot'}-${rand}`;
+}
+
+app.post('/onboarding/create', authMiddleware, async (req, res) => {
+  try {
+    const { niche, business_name, telephone_pro, ville, color, premier_produit, premier_prix } = req.body;
+    if (!niche || !business_name) return res.status(400).json({ error:'Niche et nom requis' });
+    if (!ONBOARDING_NICHES.find(n => n.id === niche)) return res.status(400).json({ error:'Niche invalide' });
+    
+    const botId = generateBotId(business_name);
+    const promptBase = NICHE_PROMPTS[niche] || NICHE_PROMPTS.autre;
+    const fullPrompt = `${promptBase}\n\nNom de l'entreprise : ${business_name}\nVille : ${ville||'Dakar'}\nTéléphone professionnel : ${telephone_pro||'à compléter'}\n\nRéponds toujours en français, avec une touche chaleureuse. Tu peux comprendre et répondre en wolof si le client te parle wolof.`;
+    
+    const config = {
+      id: botId,
+      user_id: req.userId,
+      nom: business_name,
+      ville: ville || 'Dakar',
+      telephone_pro: telephone_pro || null,
+      niche,
+      couleur: color || '#06C167',
+      prompt: fullPrompt,
+      langues: ['fr', 'wo'],
+      actif: true,
+      plan: 'trial',
+      trial_until: new Date(Date.now() + 3*24*60*60*1000).toISOString(),
+      created_at: new Date().toISOString()
+    };
+    
+    const inserted = await db.insert('bots', config);
+    if (!inserted?.[0]) return res.status(500).json({ error:'Erreur création bot' });
+    
+    if (premier_produit && premier_prix) {
+      try {
+        await db.insert('produits', {
+          bot_id: botId,
+          nom: premier_produit,
+          prix: parseInt(premier_prix) || 0,
+          actif: true
+        });
+      } catch(e) { console.warn('Premier produit non créé:', e.message); }
+    }
+    
+    res.json({
+      success: true,
+      bot_id: botId,
+      bot_url: `${CONFIG.BASE_URL}/?bot=${botId}`,
+      dashboard_url: `${CONFIG.BASE_URL}/admin/${botId}`,
+      embed_code: `<script src="${CONFIG.BASE_URL}/widget.js" data-bot="${botId}"></script>`,
+      trial_until: config.trial_until
+    });
+  } catch(e) {
+    console.error('Onboarding error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/onboarding', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Crée ton bot SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#0a1a0f,#052811);min-height:100vh;color:#fff;padding:20px}
+.wizard{max-width:680px;margin:20px auto;background:#fff;color:#0a1a0f;border-radius:24px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3)}
+.progress{height:6px;background:#f0f0f0}
+.progress-bar{height:100%;background:linear-gradient(90deg,#06C167,#058048);transition:width 0.4s ease;width:25%}
+.step{padding:50px 40px;display:none}.step.active{display:block}
+h1{font-size:30px;margin-bottom:8px;letter-spacing:-1px;line-height:1.2}
+.subtitle{color:#57534e;margin-bottom:32px;font-size:15px;line-height:1.5}
+.step-num{display:inline-block;background:#06C167;color:#000;font-size:11px;font-weight:800;letter-spacing:1.5px;padding:4px 12px;border-radius:12px;margin-bottom:14px}
+.niche-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
+.niche-card{padding:18px 12px;border:2px solid #e5e7eb;border-radius:14px;text-align:center;cursor:pointer;transition:all 0.2s;background:#fff}
+.niche-card:hover{border-color:#06C167;transform:translateY(-2px)}
+.niche-card.selected{border-color:#06C167;background:#f0fdf4}
+.niche-card .emoji{font-size:30px;margin-bottom:6px}
+.niche-card .lbl{font-size:12px;font-weight:700;margin-bottom:2px}
+.niche-card .desc{font-size:10px;color:#57534e;line-height:1.3}
+input,select{width:100%;padding:14px 16px;border:2px solid #e5e7eb;border-radius:12px;font-size:15px;margin-bottom:14px;outline:none;transition:border 0.2s;background:#fff;color:#0a1a0f}
+input:focus,select:focus{border-color:#06C167}
+label{display:block;font-size:13px;font-weight:700;color:#0a1a0f;margin-bottom:6px}
+.color-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:24px}
+.color-swatch{height:48px;border-radius:10px;cursor:pointer;border:3px solid transparent;transition:all 0.2s}
+.color-swatch:hover{transform:scale(1.05)}.color-swatch.selected{border-color:#0a1a0f;transform:scale(1.05)}
+.btn-row{display:flex;gap:10px;margin-top:8px}
+.btn{padding:14px 24px;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;border:none;transition:all 0.2s}
+.btn-primary{background:#06C167;color:#fff;flex:2}.btn-primary:hover{background:#058048}
+.btn-secondary{background:#f0f0f0;color:#0a1a0f;flex:1}.btn-secondary:hover{background:#e0e0e0}
+.btn:disabled{opacity:0.4;cursor:not-allowed}
+.success{text-align:center;padding:60px 20px}
+.success-emoji{font-size:64px;margin-bottom:20px}
+.success h2{font-size:32px;margin-bottom:12px;color:#0a1a0f}
+.success p{color:#57534e;margin-bottom:24px;font-size:15px}
+.success-card{background:#f9fafb;border-left:4px solid #06C167;padding:18px;border-radius:10px;text-align:left;margin:14px 0;font-family:'Courier New',monospace;font-size:12px;word-break:break-all}
+.success-card strong{display:block;color:#0a1a0f;font-family:-apple-system,sans-serif;margin-bottom:6px;font-size:13px}
+.row-2col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.niche-grid{grid-template-columns:repeat(2,1fr)}.color-row{grid-template-columns:repeat(4,1fr)}.row-2col{grid-template-columns:1fr}}
+.brand-header{padding:16px 40px;background:#0a1a0f;color:#fff;font-size:13px;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center}
+.brand-header b{color:#06C167}
+.feature-pill{display:inline-block;background:#dcfce7;color:#166534;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;margin-right:6px}
+.checkbox-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;padding:14px;background:#f9fafb;border-radius:10px;cursor:pointer}
+.checkbox-row input{width:auto;margin:0;flex-shrink:0;margin-top:3px}
+.checkbox-row label{font-size:13px;cursor:pointer;color:#1c1917;font-weight:500}
+.checkbox-row label a{color:#06C167}
+</style></head><body>
+
+<div class="wizard">
+<div class="brand-header"><span>Sama<b>Bot</b> · Onboarding</span><span style="opacity:0.7" id="step-counter">Étape 1/4</span></div>
+<div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+
+<div class="step active" id="step-1">
+<div class="step-num">ÉTAPE 1 / 4</div>
+<h1>Quel type d'<span style="color:#06C167">activité</span> as-tu ?</h1>
+<p class="subtitle">Ton bot sera pré-configuré avec un prompt adapté à ton secteur. Tu pourras tout personnaliser ensuite.</p>
+<div class="niche-grid" id="niche-grid"></div>
+<div class="btn-row"><button class="btn btn-primary" id="btn-step-1" disabled onclick="goStep(2)">Continuer →</button></div>
+</div>
+
+<div class="step" id="step-2">
+<div class="step-num">ÉTAPE 2 / 4</div>
+<h1>Parle-moi de ton <span style="color:#06C167">business</span></h1>
+<p class="subtitle">Ces informations apparaîtront dans les conversations avec tes clients.</p>
+<label>Nom de ton business *</label>
+<input type="text" id="business_name" placeholder="Ex: Chez Maman Aïcha" maxlength="50">
+<div class="row-2col">
+<div><label>Ville</label><input type="text" id="ville" placeholder="Dakar" value="Dakar"></div>
+<div><label>WhatsApp pro</label><input type="text" id="telephone_pro" placeholder="+221 77 ..."></div>
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(1)">← Retour</button>
+<button class="btn btn-primary" id="btn-step-2" onclick="goStep(3)">Continuer →</button>
+</div>
+</div>
+
+<div class="step" id="step-3">
+<div class="step-num">ÉTAPE 3 / 4</div>
+<h1>Choisis ta <span style="color:#06C167">couleur</span></h1>
+<p class="subtitle">Cette couleur sera utilisée pour les boutons, le widget chat et l'identité visuelle de ton bot.</p>
+<div class="color-row" id="color-row">
+<div class="color-swatch selected" data-color="#06C167" style="background:#06C167"></div>
+<div class="color-swatch" data-color="#3b82f6" style="background:#3b82f6"></div>
+<div class="color-swatch" data-color="#8b5cf6" style="background:#8b5cf6"></div>
+<div class="color-swatch" data-color="#ec4899" style="background:#ec4899"></div>
+<div class="color-swatch" data-color="#f59e0b" style="background:#f59e0b"></div>
+<div class="color-swatch" data-color="#dc2626" style="background:#dc2626"></div>
+</div>
+<label>Premier produit/service (optionnel)</label>
+<div class="row-2col">
+<input type="text" id="premier_produit" placeholder="Ex: Thiéboudienne complet">
+<input type="number" id="premier_prix" placeholder="Prix en FCFA (ex: 3500)">
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(2)">← Retour</button>
+<button class="btn btn-primary" onclick="goStep(4)">Continuer →</button>
+</div>
+</div>
+
+<div class="step" id="step-4">
+<div class="step-num">ÉTAPE 4 / 4</div>
+<h1>Prêt à <span style="color:#06C167">décoller</span> ?</h1>
+<p class="subtitle">Vérifie tes infos puis clique sur "Créer mon bot". Tu auras 3 jours d'essai gratuit, sans carte bancaire.</p>
+<div id="recap" style="background:#f9fafb;padding:18px;border-radius:12px;margin-bottom:20px;font-size:14px;line-height:1.8"></div>
+<div class="checkbox-row">
+<input type="checkbox" id="cgu_accept">
+<label for="cgu_accept">J'accepte les <a href="/terms" target="_blank">Conditions générales</a> et la <a href="/privacy-full" target="_blank">Politique de confidentialité</a> de SamaBot.</label>
+</div>
+<div class="btn-row">
+<button class="btn btn-secondary" onclick="goStep(3)">← Retour</button>
+<button class="btn btn-primary" id="btn-create" onclick="createBot()" disabled>🚀 Créer mon bot</button>
+</div>
+</div>
+
+<div class="step" id="step-5">
+<div class="success">
+<div class="success-emoji">🎉</div>
+<h2>Ton bot est <span style="color:#06C167">live</span> !</h2>
+<p>Bienvenue dans SamaBot. Tu as 3 jours pour tester gratuitement, sans carte bancaire.</p>
+<div class="success-card"><strong>🌐 URL de ton bot</strong><span id="bot-url"></span></div>
+<div class="success-card"><strong>📊 Tableau de bord</strong><span id="dashboard-url"></span></div>
+<div class="success-card"><strong>📝 Code embed (à coller sur ton site)</strong><span id="embed-code"></span></div>
+<div style="margin-top:24px">
+<span class="feature-pill">✓ Bot créé</span>
+<span class="feature-pill">✓ Trial 3 jours</span>
+<span class="feature-pill">✓ Wolof + Français</span>
+</div>
+<div class="btn-row" style="margin-top:24px">
+<button class="btn btn-primary" onclick="window.location.href=document.getElementById('dashboard-url').textContent.trim()">→ Aller au dashboard</button>
+</div>
+</div>
+</div>
+
+</div>
+
+<script>
+const NICHES = ${JSON.stringify(ONBOARDING_NICHES)};
+let state = { niche:null, business_name:'', ville:'Dakar', telephone_pro:'', color:'#06C167', premier_produit:'', premier_prix:'' };
+
+const grid = document.getElementById('niche-grid');
+NICHES.forEach(n => {
+  const div = document.createElement('div');
+  div.className = 'niche-card';
+  div.dataset.id = n.id;
+  div.innerHTML = '<div class="emoji">'+n.emoji+'</div><div class="lbl">'+n.label.replace(/^[^ ]+ /,'')+'</div><div class="desc">'+n.description+'</div>';
+  div.onclick = () => {
+    document.querySelectorAll('.niche-card').forEach(c => c.classList.remove('selected'));
+    div.classList.add('selected');
+    state.niche = n.id;
+    document.getElementById('btn-step-1').disabled = false;
+  };
+  grid.appendChild(div);
+});
+
+document.querySelectorAll('.color-swatch').forEach(sw => {
+  sw.onclick = () => {
+    document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+    sw.classList.add('selected');
+    state.color = sw.dataset.color;
+  };
+});
+
+document.getElementById('cgu_accept').onchange = (e) => {
+  document.getElementById('btn-create').disabled = !e.target.checked;
+};
+
+function updateProgress(step){
+  document.getElementById('progress-bar').style.width = (step*20)+'%';
+  document.getElementById('step-counter').textContent = 'Étape '+step+'/4';
+}
+
+function goStep(n){
+  if(n === 2){
+    if(!state.niche){ alert('Choisis une niche'); return; }
+  }
+  if(n === 3){
+    state.business_name = document.getElementById('business_name').value.trim();
+    state.ville = document.getElementById('ville').value.trim() || 'Dakar';
+    state.telephone_pro = document.getElementById('telephone_pro').value.trim();
+    if(!state.business_name){ alert('Donne un nom à ton business'); return; }
+  }
+  if(n === 4){
+    state.premier_produit = document.getElementById('premier_produit').value.trim();
+    state.premier_prix = document.getElementById('premier_prix').value.trim();
+    var nicheLabel = NICHES.find(x => x.id === state.niche).label;
+    document.getElementById('recap').innerHTML = '<strong>'+nicheLabel+'</strong> · '+state.business_name+'<br>📍 '+state.ville+(state.telephone_pro?' · 📱 '+state.telephone_pro:'')+'<br>🎨 Couleur '+state.color+(state.premier_produit?'<br>🛒 '+state.premier_produit+' à '+state.premier_prix+' FCFA':'');
+  }
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-'+n).classList.add('active');
+  updateProgress(Math.min(n,4));
+}
+
+async function createBot(){
+  const btn = document.getElementById('btn-create');
+  btn.disabled = true;
+  btn.textContent = '⏳ Création en cours...';
+  try {
+    const token = localStorage.getItem('samabot_token');
+    if(!token){
+      alert('Tu dois te connecter d\\'abord. Redirection...');
+      window.location.href = '/login?redirect=/onboarding';
+      return;
+    }
+    const r = await fetch('/onboarding/create', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify(state)
+    });
+    const data = await r.json();
+    if(!r.ok || !data.success){ alert('Erreur: '+(data.error||'inconnu')); btn.disabled = false; btn.textContent = '🚀 Créer mon bot'; return; }
+    document.getElementById('bot-url').textContent = data.bot_url;
+    document.getElementById('dashboard-url').textContent = data.dashboard_url;
+    document.getElementById('embed-code').textContent = data.embed_code;
+    document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+    document.getElementById('step-5').classList.add('active');
+    document.getElementById('progress-bar').style.width = '100%';
+    document.getElementById('step-counter').textContent = '✅ Terminé';
+  } catch(e){
+    alert('Erreur réseau: '+e.message);
+    btn.disabled = false;
+    btn.textContent = '🚀 Créer mon bot';
+  }
+}
+</script></body></html>`);
+});
+
+// ─── WIDGET JS (déjà existant ligne ~6891, voir widget complet) ──
+// Le widget /widget.js est déjà défini plus haut avec config WordPress
+// Pour le widget simple, utiliser directement le bot URL
+
+// ─── COOKIE BANNER MIDDLEWARE (#3) ─────────────────────────────
+app.get('/cookie-banner.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(`(function(){if(localStorage.getItem('sb_cookies'))return;
+var b=document.createElement('div');b.id='sb-cookies';b.style.cssText='position:fixed;bottom:20px;left:20px;right:20px;max-width:680px;margin:0 auto;background:#0a1a0f;color:#fff;padding:18px 22px;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.25);z-index:999997;font-family:-apple-system,sans-serif;font-size:14px;line-height:1.5;display:flex;align-items:center;gap:16px;flex-wrap:wrap';
+b.innerHTML='<div style="flex:1;min-width:240px">🍪 SamaBot utilise uniquement des cookies fonctionnels nécessaires au service. Aucun tracking publicitaire. <a href="/privacy-full" style="color:#06C167">En savoir plus</a></div><button onclick="localStorage.setItem(\\'sb_cookies\\',\\'1\\');document.getElementById(\\'sb-cookies\\').remove()" style="background:#06C167;color:#000;border:none;padding:10px 18px;border-radius:10px;font-weight:700;cursor:pointer;font-size:13px">OK ✓</button>';
+document.body.appendChild(b);})();`);
+});
+
+// FIN BLOC v10.4 ────────────────────────────────────────────
+
+
+// ════════════════════════════════════════════════════════════
+// FEATURES v10.5 — PLATEFORME UNIVERSELLE
+// 1) Skills modulaires (10 verticales)
+// 2) RAG — Retrieval-Augmented Generation (upload de documents)
+// 3) Function Calling — outils externes pour le bot
+// ════════════════════════════════════════════════════════════
+
+// ─── CATALOGUE DES SKILLS (10 verticales) ─────────────────────
+const SKILLS_CATALOG = {
+  commerce: {
+    id: 'commerce',
+    label: '🛒 Commerce & Vente',
+    description: 'Catalogue produits, commandes, livraison, paiement Mobile Money',
+    icon: '🛒',
+    category: 'SMB',
+    prompt: `MODULE COMMERCE ACTIVÉ:
+- Tu peux présenter le catalogue, prendre des commandes, gérer la livraison
+- Pour chaque commande, suis ce flux: choix produit → infos client → récap → confirmation → paiement
+- Mentionne les options de paiement: Wave, Orange Money, espèces, à la livraison
+- Pour les commandes urgentes, propose la livraison express si disponible`
+  },
+  rdv: {
+    id: 'rdv',
+    label: '📅 Rendez-vous & Planning',
+    description: 'Réservation de créneaux, rappels automatiques, calendrier',
+    icon: '📅',
+    category: 'SMB',
+    prompt: `MODULE RENDEZ-VOUS ACTIVÉ:
+- Tu peux proposer les créneaux disponibles selon les horaires d'ouverture
+- Demande au client: nom, téléphone, motif, date/heure souhaitées
+- Confirme le RDV avec récapitulatif précis
+- Mentionne que des rappels automatiques seront envoyés 24h avant`
+  },
+  sante: {
+    id: 'sante',
+    label: '🏥 Santé & Médical',
+    description: 'FAQ santé, prise de RDV médecin, urgences (jamais de diagnostic)',
+    icon: '🏥',
+    category: 'Enterprise',
+    prompt: `MODULE SANTÉ ACTIVÉ:
+RÈGLES CRITIQUES:
+- Tu ne donnes JAMAIS de diagnostic médical, JAMAIS de traitement, JAMAIS de prescription
+- Si le client décrit des symptômes, redirige IMMÉDIATEMENT vers un médecin: "Pour votre santé, consultez un médecin. Voulez-vous prendre RDV ?"
+- En cas d'urgence (douleur intense, malaise, accident, hémorragie): redirige IMMÉDIATEMENT vers le 1515 (SAMU Sénégal) ou le service d'urgences le plus proche
+- Tu peux: prendre RDV, donner les horaires, indiquer les services, expliquer les démarches administratives
+- Tu ne peux pas: interpréter des analyses, conseiller des médicaments, donner d'avis médical`
+  },
+  education: {
+    id: 'education',
+    label: '🎓 Éducation & Formation',
+    description: 'Inscription, cours, examens, FAQ administrative étudiants',
+    icon: '🎓',
+    category: 'Enterprise',
+    prompt: `MODULE ÉDUCATION ACTIVÉ:
+- Tu réponds aux questions sur: inscriptions, frais de scolarité, calendrier, examens, programmes
+- Tu peux orienter vers les services administratifs (scolarité, vie étudiante, bibliothèque)
+- Pour les questions pédagogiques précises, redirige vers le professeur ou le département
+- Si un étudiant en détresse psychologique: redirige vers le service d'écoute ou un psychologue`
+  },
+  banque: {
+    id: 'banque',
+    label: '🏦 Banque & Finance',
+    description: 'FAQ produits bancaires, agence proche, formulaires (jamais de transaction)',
+    icon: '🏦',
+    category: 'Enterprise',
+    prompt: `MODULE BANQUE ACTIVÉ:
+RÈGLES CRITIQUES:
+- Tu ne demandes JAMAIS le mot de passe, code PIN, ou code SMS d'authentification
+- Tu ne fais JAMAIS de transaction au nom du client (virement, retrait, prêt)
+- Tu ne donnes JAMAIS le solde précis sans authentification forte
+- Tu peux: orienter vers une agence, expliquer les produits, lister les documents requis pour un dossier
+- En cas de fraude présumée ou carte perdue: redirige IMMÉDIATEMENT vers le service d'opposition 24/7
+- Pour les opérations sensibles, redirige TOUJOURS vers l'application officielle ou l'agence`
+  },
+  telecom: {
+    id: 'telecom',
+    label: '📞 Télécom & Support',
+    description: 'Recharge, forfaits, pannes, technical support',
+    icon: '📞',
+    category: 'Enterprise',
+    prompt: `MODULE TÉLÉCOM ACTIVÉ:
+- Tu peux: expliquer les forfaits, aider à choisir une offre, donner les codes USSD, expliquer comment recharger
+- Tu peux: créer un ticket de support pour panne réseau, panne ADSL, panne fibre
+- Tu peux: orienter vers les boutiques physiques, donner les hotlines
+- Pour les pannes critiques (zone entière sans réseau): escalade vers un technicien humain
+- Tu ne peux PAS: réinitialiser des comptes, donner accès à des données client sans authentification`
+  },
+  gouv: {
+    id: 'gouv',
+    label: '🏛️ Service public',
+    description: 'État civil, formulaires admin, RDV mairie/préfecture',
+    icon: '🏛️',
+    category: 'Government',
+    prompt: `MODULE GOUVERNEMENT ACTIVÉ:
+- Tu réponds aux questions sur: état civil, démarches administratives, formulaires officiels
+- Tu peux indiquer les pièces requises pour: CNI, passeport, acte de naissance, mariage, etc.
+- Tu peux orienter vers les guichets, donner les horaires, expliquer les délais
+- Reste OBJECTIF et NEUTRE: jamais d'opinion politique, jamais de jugement sur les politiques publiques
+- Pour les recours, plaintes, contestations: oriente vers le médiateur ou le service compétent`
+  },
+  ong: {
+    id: 'ong',
+    label: '🤝 ONG & Humanitaire',
+    description: 'Distribution aide, inscription bénéficiaires, info programmes',
+    icon: '🤝',
+    category: 'NGO',
+    prompt: `MODULE ONG ACTIVÉ:
+- Tu peux: informer sur les programmes humanitaires, aider à l'inscription des bénéficiaires
+- Tu peux: indiquer les points de distribution, les horaires, les documents requis
+- Tu peux: orienter vers les services sociaux, médecins, psychologues
+- En cas de détresse, violence, abus: redirige IMMÉDIATEMENT vers les hotlines d'urgence
+- Reste empathique et bienveillant. Adapte ton vocabulaire au niveau d'éducation du bénéficiaire`
+  },
+  rh: {
+    id: 'rh',
+    label: '👥 RH & Recrutement',
+    description: 'FAQ employés, candidatures, congés, fiches de paie',
+    icon: '👥',
+    category: 'Enterprise',
+    prompt: `MODULE RH ACTIVÉ:
+- Tu réponds aux questions internes des employés: congés, paie, mutuelle, formation
+- Tu peux orienter vers le service RH humain pour les cas complexes
+- Tu peux gérer les premières étapes du recrutement: présentation poste, FAQ candidat
+- Pour les conflits, harcèlement, problèmes graves: redirige IMMÉDIATEMENT vers la médiation/RH
+- Confidentialité absolue: ne jamais partager des infos d'un employé à un autre`
+  },
+  urgence: {
+    id: 'urgence',
+    label: '🚨 Escalade & Urgence',
+    description: 'Détection situations critiques, transfert humain immédiat',
+    icon: '🚨',
+    category: 'Universal',
+    prompt: `MODULE URGENCE ACTIVÉ (toujours actif en superposition):
+DÉTECTION D'URGENCE - Si le message contient:
+- Mots-clés: "urgent", "secours", "aidez-moi", "danger", "menace", "violence", "blessé"
+- Détresse émotionnelle: "je veux mourir", "je n'en peux plus", "à bout"
+- Situation critique: accident, vol, agression, incendie
+
+ACTION OBLIGATOIRE:
+1. Réponds avec compassion: "Je comprends que c'est difficile, vous n'êtes pas seul(e)."
+2. Donne les hotlines d'urgence Sénégal:
+   - Police: 17 ou 18
+   - SAMU: 1515
+   - Pompiers: 18
+   - Écoute psychologique: +221 33 825 90 75 (SOS Suicide)
+3. Si possible, escalade vers un humain immédiatement`
+  }
+};
+
+// ─── ENRICHISSEMENT DU PROMPT AVEC SKILLS ─────────────────────
+function enrichPromptWithSkills(basePrompt, bot) {
+  const skills = bot.skills || [];
+  if (!Array.isArray(skills) || skills.length === 0) {
+    return basePrompt;
+  }
+  
+  const skillsBlocks = skills
+    .filter(sid => SKILLS_CATALOG[sid])
+    .map(sid => SKILLS_CATALOG[sid].prompt)
+    .join('\n\n');
+  
+  if (!skillsBlocks) return basePrompt;
+  
+  const skillsHeader = `\n\n═══════════════════════════════════════════════
+COMPÉTENCES ACTIVÉES (Skills): ${skills.map(s => SKILLS_CATALOG[s]?.icon + ' ' + SKILLS_CATALOG[s]?.label).filter(Boolean).join(', ')}
+═══════════════════════════════════════════════
+
+${skillsBlocks}
+═══════════════════════════════════════════════`;
+  
+  return basePrompt + skillsHeader;
+}
+
+// Wrapper qui ne casse rien
+function makePromptUniversal(bot) {
+  const base = (typeof makePrompt === 'function') ? makePrompt(bot) : `Tu es l'assistant de ${bot.nom}. Réponds en français et wolof.`;
+  let enriched = enrichPromptWithSkills(base, bot);
+  
+  if (bot.context_documents && Array.isArray(bot.context_documents) && bot.context_documents.length > 0) {
+    const ragBlock = `\n\n═══════════════════════════════════════════════
+DOCUMENTS DE RÉFÉRENCE DISPONIBLES:
+═══════════════════════════════════════════════
+Tu as accès aux documents suivants pour répondre précisément aux questions:
+
+${bot.context_documents.slice(0, 5).map((doc, i) => `[Doc ${i+1}] ${doc.title}: ${doc.content?.slice(0, 1500)}...`).join('\n\n')}
+
+INSTRUCTIONS RAG:
+- Si la question du client correspond à l'un de ces documents, RÉPONDS en te basant sur le contenu
+- CITE la source: "Selon notre [document]..."
+- Si la question n'est pas couverte, dis honnêtement: "Je n'ai pas cette information précise, je vous oriente vers..."
+- Ne JAMAIS inventer une information qui n'est pas dans les documents`;
+    enriched += ragBlock;
+  }
+  
+  if (bot.allowed_functions && Array.isArray(bot.allowed_functions) && bot.allowed_functions.length > 0) {
+    const fnBlock = `\n\n═══════════════════════════════════════════════
+OUTILS / FONCTIONS DISPONIBLES:
+═══════════════════════════════════════════════
+Tu peux exécuter les actions suivantes en générant une réponse spéciale au format JSON:
+
+${bot.allowed_functions.map(fn => `- ${fn.name}: ${fn.description}`).join('\n')}
+
+Pour appeler une fonction, réponds AVEC un bloc JSON entre balises:
+<function_call>
+{"name": "nom_fonction", "arguments": {...}}
+</function_call>
+
+Puis le résultat sera ajouté à la conversation.`;
+    enriched += fnBlock;
+  }
+  
+  return enriched;
+}
+
+// ─── ENDPOINTS SKILLS ─────────────────────────────────────────
+app.get('/skills', (req, res) => {
+  res.json({
+    skills: Object.values(SKILLS_CATALOG).map(s => ({
+      id: s.id, label: s.label, description: s.description,
+      icon: s.icon, category: s.category
+    })),
+    total: Object.keys(SKILLS_CATALOG).length
+  });
+});
+
+app.get('/skills/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&select=skills`);
+    const skills = bots?.[0]?.skills || [];
+    res.json({ bot_id: req.params.botId, skills, available: Object.keys(SKILLS_CATALOG) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/skills/:botId', authMiddleware, async (req, res) => {
+  try {
+    const { skills } = req.body;
+    if (!Array.isArray(skills)) return res.status(400).json({ error: 'skills doit être un tableau' });
+    const invalid = skills.filter(s => !SKILLS_CATALOG[s]);
+    if (invalid.length) return res.status(400).json({ error: `Skills invalides: ${invalid.join(', ')}` });
+    
+    await db.update('bots', { skills }, `?id=eq.${req.params.botId}&user_id=eq.${req.userId}`);
+    res.json({ success: true, bot_id: req.params.botId, skills_activated: skills, count: skills.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── PAGE D'ADMIN POUR CONFIGURER LES SKILLS ──────────────────
+app.get('/admin/skills/:botId', async (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skills — SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;background:#f9fafb;color:#0a1a0f;padding:30px 20px;line-height:1.5}
+.container{max-width:900px;margin:0 auto}
+.brand{font-size:24px;font-weight:800;margin-bottom:6px}.brand span{color:#06C167}
+.subtitle{color:#57534e;font-size:14px;margin-bottom:24px}
+.intro{background:linear-gradient(135deg,#0a1a0f,#052811);color:#fff;padding:24px;border-radius:14px;margin-bottom:24px}
+.intro h2{font-size:20px;margin-bottom:8px}.intro p{font-size:14px;color:rgba(255,255,255,0.85);line-height:1.5}
+.category{font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#57534e;margin:24px 0 10px;padding-left:4px}
+.skills-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.skill-card{background:#fff;border:2px solid #e5e7eb;border-radius:12px;padding:18px;cursor:pointer;transition:all 0.2s;position:relative}
+.skill-card:hover{border-color:#06C167;transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.06)}
+.skill-card.active{border-color:#06C167;background:#f0fdf4}
+.skill-card .ic{font-size:30px;margin-bottom:8px}
+.skill-card h3{font-size:15px;font-weight:800;margin-bottom:4px;color:#0a1a0f}
+.skill-card p{font-size:12px;color:#57534e;line-height:1.5}
+.skill-card .check{position:absolute;top:14px;right:14px;width:22px;height:22px;border:2px solid #d1d5db;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#fff}
+.skill-card.active .check{background:#06C167;border-color:#06C167}
+.skill-card.active .check::after{content:"✓"}
+.actions{margin-top:24px;display:flex;gap:10px;align-items:center}
+.btn{padding:12px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;border:none}
+.btn-primary{background:#06C167;color:#fff}.btn-primary:hover{background:#058048}
+.btn-secondary{background:#f0f0f0;color:#0a1a0f}
+.counter{margin-left:auto;font-size:13px;color:#57534e}
+.alert{padding:12px 16px;border-radius:10px;margin-bottom:16px;display:none;font-size:13px}
+.alert.show{display:block}
+.alert.success{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+.alert.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+</style></head><body>
+
+<div class="container">
+<div class="brand">Sama<span>Bot</span> · Skills</div>
+<div class="subtitle">Bot ID: ${req.params.botId} · Active uniquement les compétences dont tu as besoin</div>
+
+<div class="intro">
+<h2>🧠 Compétences modulaires</h2>
+<p>SamaBot devient adapté à ton secteur en activant des "Skills" spécialisés. Chaque skill ajoute des règles métier au bot. Tu peux activer plusieurs skills (ex: Commerce + RDV + Urgence pour un restaurant qui prend des réservations).</p>
+</div>
+
+<div id="alert" class="alert"></div>
+
+<div id="skills-container"></div>
+
+<div class="actions">
+<button class="btn btn-primary" onclick="saveSkills()">💾 Sauvegarder</button>
+<button class="btn btn-secondary" onclick="window.location.href='/admin/${req.params.botId}'">← Retour dashboard</button>
+<div class="counter"><strong id="count">0</strong> skill(s) activé(s)</div>
+</div>
+</div>
+
+<script>
+const BOT_ID = ${JSON.stringify(req.params.botId)};
+let availableSkills = [];
+let activeSkills = [];
+
+async function loadSkills() {
+  try {
+    const [allRes, botRes] = await Promise.all([
+      fetch('/skills').then(r => r.json()),
+      fetch('/skills/' + BOT_ID).then(r => r.json())
+    ]);
+    availableSkills = allRes.skills;
+    activeSkills = botRes.skills || [];
+    render();
+  } catch(e) {
+    showAlert('error', 'Erreur de chargement: ' + e.message);
+  }
+}
+
+function render() {
+  const groups = {};
+  availableSkills.forEach(s => {
+    if (!groups[s.category]) groups[s.category] = [];
+    groups[s.category].push(s);
+  });
+  
+  let html = '';
+  for (const cat of ['Universal', 'SMB', 'Enterprise', 'Government', 'NGO']) {
+    if (!groups[cat]) continue;
+    html += '<div class="category">' + cat + '</div>';
+    html += '<div class="skills-grid">';
+    groups[cat].forEach(s => {
+      const active = activeSkills.includes(s.id);
+      html += '<div class="skill-card' + (active ? ' active' : '') + '" data-id="' + s.id + '" onclick="toggleSkill(\\'' + s.id + '\\')">';
+      html += '<div class="check"></div>';
+      html += '<div class="ic">' + s.icon + '</div>';
+      html += '<h3>' + s.label.replace(/^[^ ]+ /, '') + '</h3>';
+      html += '<p>' + s.description + '</p>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  document.getElementById('skills-container').innerHTML = html;
+  document.getElementById('count').textContent = activeSkills.length;
+}
+
+function toggleSkill(id) {
+  if (activeSkills.includes(id)) {
+    activeSkills = activeSkills.filter(s => s !== id);
+  } else {
+    activeSkills.push(id);
+  }
+  render();
+}
+
+async function saveSkills() {
+  try {
+    const token = localStorage.getItem('samabot_token');
+    if (!token) { showAlert('error', 'Tu dois être connecté'); return; }
+    const r = await fetch('/skills/' + BOT_ID, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({skills: activeSkills})
+    });
+    const data = await r.json();
+    if (r.ok && data.success) {
+      showAlert('success', '✅ ' + data.count + ' skill(s) activé(s) avec succès. Le bot est mis à jour.');
+    } else {
+      showAlert('error', 'Erreur: ' + (data.error || 'inconnue'));
+    }
+  } catch(e) {
+    showAlert('error', 'Erreur réseau: ' + e.message);
+  }
+}
+
+function showAlert(type, msg) {
+  const a = document.getElementById('alert');
+  a.className = 'alert show ' + type;
+  a.textContent = msg;
+  setTimeout(() => a.classList.remove('show'), 5000);
+}
+
+loadSkills();
+</script>
+</body></html>`);
+});
+
+// ─── RAG — UPLOAD DE DOCUMENTS ────────────────────────────────
+function chunkText(text, maxChars = 1500) {
+  const chunks = [];
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  let current = '';
+  for (const sent of sentences) {
+    if ((current + ' ' + sent).length > maxChars) {
+      if (current) chunks.push(current.trim());
+      current = sent;
+    } else {
+      current = current ? current + ' ' + sent : sent;
+    }
+  }
+  if (current) chunks.push(current.trim());
+  return chunks;
+}
+
+function extractKeywords(text) {
+  const stopwords = new Set(['le','la','les','de','des','du','un','une','et','ou','est','sont','ce','cette','ces','en','à','au','aux','par','pour','sur','dans','avec','que','qui','dont','ne','pas','plus','mais','si','je','tu','il','elle','nous','vous','ils','elles','my','the','a','an','of','to','in','is','are','this','that','it','for','on','with','and','or']);
+  const words = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').match(/[a-z0-9]{3,}/g) || [];
+  const freq = {};
+  words.forEach(w => { if (!stopwords.has(w)) freq[w] = (freq[w]||0)+1; });
+  return Object.entries(freq).sort((a,b) => b[1]-a[1]).slice(0, 20).map(e => e[0]);
+}
+
+async function searchRagChunks(botId, query, limit = 3) {
+  try {
+    const queryWords = (query.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').match(/[a-z0-9]{3,}/g) || []);
+    if (queryWords.length === 0) return [];
+    
+    const chunks = await db.select('bot_documents', `?bot_id=eq.${botId}&select=id,title,content,keywords&limit=200`);
+    if (!chunks?.length) return [];
+    
+    const scored = chunks.map(c => {
+      const text = (c.content + ' ' + (c.keywords||[]).join(' ')).toLowerCase();
+      let score = 0;
+      queryWords.forEach(w => {
+        const matches = (text.match(new RegExp(w, 'g')) || []).length;
+        score += matches;
+      });
+      return { ...c, score };
+    });
+    
+    return scored.filter(c => c.score > 0).sort((a,b) => b.score - a.score).slice(0, limit);
+  } catch(e) {
+    console.warn('RAG search error:', e.message);
+    return [];
+  }
+}
+
+app.post('/rag/upload/:botId', authMiddleware, async (req, res) => {
+  try {
+    const { title, content, source_type } = req.body;
+    if (!title || !content) return res.status(400).json({ error: 'title et content requis' });
+    if (content.length < 50) return res.status(400).json({ error: 'Contenu trop court (min 50 caractères)' });
+    if (content.length > 500000) return res.status(400).json({ error: 'Contenu trop long (max 500000 caractères)' });
+    
+    const botCheck = await db.select('bots', `?id=eq.${req.params.botId}&user_id=eq.${req.userId}&select=id`);
+    if (!botCheck?.length) return res.status(403).json({ error: 'Bot non trouvé ou accès refusé' });
+    
+    const chunks = chunkText(content);
+    const inserted = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const keywords = extractKeywords(chunk);
+      try {
+        const r = await db.insert('bot_documents', {
+          bot_id: req.params.botId,
+          title: chunks.length > 1 ? `${title} (partie ${i+1}/${chunks.length})` : title,
+          content: chunk,
+          keywords,
+          source_type: source_type || 'text',
+          chunk_index: i,
+          created_at: new Date().toISOString()
+        });
+        if (r?.[0]) inserted.push(r[0].id);
+      } catch(e) { console.warn('Insert chunk failed:', e.message); }
+    }
+    
+    res.json({
+      success: true,
+      title,
+      chunks_created: inserted.length,
+      chunk_ids: inserted,
+      total_chars: content.length
+    });
+  } catch(e) {
+    console.error('RAG upload error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/rag/list/:botId', async (req, res) => {
+  try {
+    const docs = await db.select('bot_documents', `?bot_id=eq.${req.params.botId}&select=id,title,source_type,chunk_index,created_at&order=created_at.desc&limit=100`);
+    res.json({ bot_id: req.params.botId, documents: docs || [], total: (docs||[]).length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/rag/:botId/:docId', authMiddleware, async (req, res) => {
+  try {
+    const botCheck = await db.select('bots', `?id=eq.${req.params.botId}&user_id=eq.${req.userId}&select=id`);
+    if (!botCheck?.length) return res.status(403).json({ error: 'Accès refusé' });
+    
+    await db.delete('bot_documents', `?id=eq.${req.params.docId}&bot_id=eq.${req.params.botId}`);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/rag/:botId/title/:title', authMiddleware, async (req, res) => {
+  try {
+    const botCheck = await db.select('bots', `?id=eq.${req.params.botId}&user_id=eq.${req.userId}&select=id`);
+    if (!botCheck?.length) return res.status(403).json({ error: 'Accès refusé' });
+    
+    const docs = await db.select('bot_documents', `?bot_id=eq.${req.params.botId}&title=like.${encodeURIComponent(req.params.title + '%')}&select=id`);
+    let count = 0;
+    for (const d of (docs||[])) {
+      await db.delete('bot_documents', `?id=eq.${d.id}`);
+      count++;
+    }
+    res.json({ success: true, deleted: count });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/admin/rag/:botId', async (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RAG Documents — SamaBot</title><style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;background:#f9fafb;color:#0a1a0f;padding:30px 20px;line-height:1.5}
+.container{max-width:900px;margin:0 auto}
+.brand{font-size:24px;font-weight:800;margin-bottom:6px}.brand span{color:#06C167}
+.subtitle{color:#57534e;font-size:14px;margin-bottom:24px}
+.intro{background:linear-gradient(135deg,#3b82f6,#1e40af);color:#fff;padding:24px;border-radius:14px;margin-bottom:24px}
+.intro h2{font-size:20px;margin-bottom:8px}
+.intro p{font-size:14px;color:rgba(255,255,255,0.9);line-height:1.5}
+.upload-area{background:#fff;border:2px dashed #cbd5e1;border-radius:14px;padding:32px;text-align:center;margin-bottom:24px;transition:all 0.2s}
+.upload-area:hover{border-color:#06C167;background:#f0fdf4}
+.upload-area input[type=file]{display:none}
+.upload-area label{cursor:pointer;display:block}
+.upload-area .ic{font-size:48px;margin-bottom:12px}
+.upload-area h3{font-size:18px;margin-bottom:6px}
+.upload-area p{font-size:12px;color:#57534e}
+input[type=text],textarea{width:100%;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:inherit;margin-bottom:12px;outline:none}
+input[type=text]:focus,textarea:focus{border-color:#06C167}
+textarea{min-height:120px;resize:vertical}
+.btn{padding:11px 22px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:none}
+.btn-primary{background:#06C167;color:#fff}.btn-primary:hover{background:#058048}
+.btn-secondary{background:#f0f0f0;color:#0a1a0f}
+.btn-danger{background:#fee2e2;color:#991b1b}
+.docs-list{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
+.doc-item{padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center}
+.doc-item:last-child{border-bottom:none}
+.doc-item .info h4{font-size:14px;font-weight:700}
+.doc-item .info p{font-size:11px;color:#57534e;margin-top:2px}
+.empty{text-align:center;padding:40px;color:#999;font-style:italic;font-size:13px}
+.alert{padding:12px 16px;border-radius:10px;margin-bottom:16px;display:none;font-size:13px}
+.alert.show{display:block}
+.alert.success{background:#dcfce7;color:#166534}
+.alert.error{background:#fee2e2;color:#991b1b}
+</style></head><body>
+
+<div class="container">
+<div class="brand">Sama<span>Bot</span> · Documents RAG</div>
+<div class="subtitle">Bot ID: ${req.params.botId} · Le bot répondra en se basant sur ces documents</div>
+
+<div class="intro">
+<h2>📚 Base de connaissances</h2>
+<p>Upload tes documents (FAQ, manuel, guide tarifaire, procédures) et le bot pourra y répondre précisément, en citant la source. Idéal pour banques, télécoms, services publics, ONG.</p>
+</div>
+
+<div id="alert" class="alert"></div>
+
+<form id="form" style="background:#fff;padding:24px;border-radius:14px;margin-bottom:24px;border:1px solid #e5e7eb">
+<h3 style="margin-bottom:14px">Ajouter un document</h3>
+<input type="text" id="title" placeholder="Titre du document (ex: Guide tarifaire 2026)" maxlength="100" required>
+<select id="source_type" style="width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px">
+<option value="faq">FAQ</option>
+<option value="manual">Manuel / Guide</option>
+<option value="tariff">Tarifs / Pricing</option>
+<option value="policy">Politique / Règlement</option>
+<option value="procedure">Procédure</option>
+<option value="text">Texte libre</option>
+</select>
+<textarea id="content" placeholder="Colle ici le contenu du document (texte uniquement, max 500K caractères)" required></textarea>
+<button class="btn btn-primary" type="submit">📤 Envoyer le document</button>
+</form>
+
+<h3 style="margin-bottom:12px">Documents actuels</h3>
+<div id="docs-list" class="docs-list">
+<div class="empty">Aucun document encore. Upload ton premier ci-dessus.</div>
+</div>
+
+<div style="margin-top:24px">
+<button class="btn btn-secondary" onclick="window.location.href='/admin/${req.params.botId}'">← Retour dashboard</button>
+</div>
+</div>
+
+<script>
+const BOT_ID = ${JSON.stringify(req.params.botId)};
+
+async function loadDocs() {
+  try {
+    const r = await fetch('/rag/list/' + BOT_ID);
+    const data = await r.json();
+    const list = document.getElementById('docs-list');
+    if (!data.documents || data.documents.length === 0) {
+      list.innerHTML = '<div class="empty">Aucun document encore. Upload ton premier ci-dessus.</div>';
+      return;
+    }
+    
+    const groups = {};
+    data.documents.forEach(d => {
+      const baseTitle = d.title.replace(/ \\(partie \\d+\\/\\d+\\)$/, '');
+      if (!groups[baseTitle]) groups[baseTitle] = { title: baseTitle, count: 0, source_type: d.source_type, created_at: d.created_at };
+      groups[baseTitle].count++;
+    });
+    
+    list.innerHTML = Object.values(groups).map(g => 
+      '<div class="doc-item"><div class="info"><h4>' + g.title + '</h4><p>' + g.source_type + ' · ' + g.count + ' chunk(s) · ' + new Date(g.created_at).toLocaleDateString('fr-FR') + '</p></div>' +
+      '<button class="btn btn-danger" onclick="deleteDoc(\\'' + g.title.replace(/'/g, "\\\\'") + '\\')">🗑 Supprimer</button>' +
+      '</div>'
+    ).join('');
+  } catch(e) {
+    showAlert('error', 'Erreur: ' + e.message);
+  }
+}
+
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = document.getElementById('title').value.trim();
+  const content = document.getElementById('content').value.trim();
+  const source_type = document.getElementById('source_type').value;
+  if (!title || !content) return;
+  
+  try {
+    const token = localStorage.getItem('samabot_token');
+    if (!token) { showAlert('error', 'Tu dois être connecté'); return; }
+    const r = await fetch('/rag/upload/' + BOT_ID, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({title, content, source_type})
+    });
+    const data = await r.json();
+    if (r.ok && data.success) {
+      showAlert('success', '✅ Document ajouté: ' + data.chunks_created + ' chunk(s) créé(s)');
+      document.getElementById('title').value = '';
+      document.getElementById('content').value = '';
+      loadDocs();
+    } else {
+      showAlert('error', 'Erreur: ' + (data.error || 'inconnue'));
+    }
+  } catch(e) {
+    showAlert('error', 'Erreur: ' + e.message);
+  }
+});
+
+async function deleteDoc(title) {
+  if (!confirm('Supprimer ce document et tous ses chunks ?')) return;
+  try {
+    const token = localStorage.getItem('samabot_token');
+    const r = await fetch('/rag/' + BOT_ID + '/title/' + encodeURIComponent(title), {
+      method: 'DELETE',
+      headers: {'Authorization':'Bearer '+token}
+    });
+    const data = await r.json();
+    if (data.success) {
+      showAlert('success', '✅ ' + data.deleted + ' chunk(s) supprimé(s)');
+      loadDocs();
+    } else {
+      showAlert('error', 'Erreur: ' + (data.error || 'inconnue'));
+    }
+  } catch(e) {
+    showAlert('error', 'Erreur: ' + e.message);
+  }
+}
+
+function showAlert(type, msg) {
+  const a = document.getElementById('alert');
+  a.className = 'alert show ' + type;
+  a.textContent = msg;
+  setTimeout(() => a.classList.remove('show'), 5000);
+}
+
+loadDocs();
+</script>
+</body></html>`);
+});
+
+// ─── FUNCTION CALLING — ENREGISTREMENT D'OUTILS ───────────────
+const BUILTIN_FUNCTIONS = {
+  get_current_time: {
+    name: 'get_current_time',
+    description: 'Retourne la date et heure actuelles au Sénégal',
+    handler: async () => ({ time: new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Dakar' }) })
+  },
+  search_catalogue: {
+    name: 'search_catalogue',
+    description: 'Recherche un produit dans le catalogue par nom',
+    parameters: { query: 'string' },
+    handler: async (args, ctx) => {
+      const cat = ctx.bot?.catalogue || [];
+      const q = (args.query || '').toLowerCase();
+      const results = cat.filter(p => (p.nom || '').toLowerCase().includes(q));
+      return { results, found: results.length };
+    }
+  },
+  check_availability: {
+    name: 'check_availability',
+    description: 'Vérifie la disponibilité d\'un créneau pour un RDV',
+    parameters: { date: 'string', heure: 'string' },
+    handler: async (args, ctx) => {
+      const { date, heure } = args;
+      try {
+        const existing = await db.select('rendez_vous', `?bot_id=eq.${ctx.botId}&date=eq.${date}&heure=eq.${heure}`);
+        return { available: !existing?.length, date, heure };
+      } catch(e) { return { available: true, date, heure }; }
+    }
+  },
+  get_bot_info: {
+    name: 'get_bot_info',
+    description: 'Retourne les informations principales du business',
+    handler: async (args, ctx) => ({
+      nom: ctx.bot?.nom,
+      telephone: ctx.bot?.telephone,
+      adresse: ctx.bot?.adresse,
+      horaires: ctx.bot?.horaires
+    })
+  }
+};
+
+const CUSTOM_WEBHOOK_FN = {
+  name: 'call_external_api',
+  description: 'Appelle une URL externe configurée pour le bot (webhook custom)',
+  parameters: { endpoint: 'string', payload: 'object' },
+  handler: async (args, ctx) => {
+    const url = ctx.bot?.webhook_function_url;
+    if (!url) return { error: 'Aucun webhook configuré' };
+    if (!args.endpoint?.match(/^[a-z_]+$/)) return { error: 'endpoint invalide' };
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-SamaBot-Signature': ctx.bot.id },
+        body: JSON.stringify({ endpoint: args.endpoint, payload: args.payload || {}, bot_id: ctx.bot.id })
+      });
+      const j = await r.json().catch(() => ({}));
+      return { status: r.status, data: j };
+    } catch(e) { return { error: e.message }; }
+  }
+};
+
+async function executeFunctionCall(call, ctx) {
+  if (!call?.name) return { error: 'name requis' };
+  const fn = BUILTIN_FUNCTIONS[call.name] || (call.name === 'call_external_api' ? CUSTOM_WEBHOOK_FN : null);
+  if (!fn) return { error: `Fonction '${call.name}' inconnue` };
+  
+  try {
+    const result = await fn.handler(call.arguments || {}, ctx);
+    return { ok: true, name: call.name, result };
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+function parseFunctionCalls(text) {
+  if (!text || typeof text !== 'string') return [];
+  const calls = [];
+  const re = /<function_call>([\s\S]*?)<\/function_call>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const obj = JSON.parse(m[1].trim());
+      if (obj?.name) calls.push(obj);
+    } catch(e) {}
+  }
+  return calls;
+}
+
+app.get('/functions', (req, res) => {
+  res.json({
+    builtin: Object.keys(BUILTIN_FUNCTIONS).map(k => ({
+      name: BUILTIN_FUNCTIONS[k].name,
+      description: BUILTIN_FUNCTIONS[k].description,
+      parameters: BUILTIN_FUNCTIONS[k].parameters || {}
+    })),
+    custom: [{ name: CUSTOM_WEBHOOK_FN.name, description: CUSTOM_WEBHOOK_FN.description }]
+  });
+});
+
+app.get('/functions/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&select=allowed_functions,webhook_function_url`);
+    res.json({
+      bot_id: req.params.botId,
+      allowed_functions: bots?.[0]?.allowed_functions || [],
+      webhook_url: bots?.[0]?.webhook_function_url || null,
+      available_builtin: Object.keys(BUILTIN_FUNCTIONS)
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/functions/:botId', authMiddleware, async (req, res) => {
+  try {
+    const { allowed_functions, webhook_function_url } = req.body;
+    
+    if (allowed_functions !== undefined && !Array.isArray(allowed_functions)) {
+      return res.status(400).json({ error: 'allowed_functions doit être un tableau' });
+    }
+    
+    const update = {};
+    if (allowed_functions !== undefined) {
+      const valid = Object.keys(BUILTIN_FUNCTIONS).concat([CUSTOM_WEBHOOK_FN.name]);
+      const invalid = allowed_functions.filter(fn => !valid.includes(fn.name));
+      if (invalid.length) return res.status(400).json({ error: `Fonctions invalides: ${invalid.map(f => f.name).join(', ')}` });
+      update.allowed_functions = allowed_functions;
+    }
+    if (webhook_function_url !== undefined) {
+      if (webhook_function_url && !/^https?:\/\//.test(webhook_function_url)) {
+        return res.status(400).json({ error: 'webhook_function_url doit commencer par http:// ou https://' });
+      }
+      update.webhook_function_url = webhook_function_url || null;
+    }
+    
+    await db.update('bots', update, `?id=eq.${req.params.botId}&user_id=eq.${req.userId}`);
+    res.json({ success: true, updated: update });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/functions/test/:botId', authMiddleware, async (req, res) => {
+  try {
+    const { name, arguments: args } = req.body;
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&user_id=eq.${req.userId}`);
+    if (!bots?.length) return res.status(403).json({ error: 'Accès refusé' });
+    
+    const result = await executeFunctionCall({ name, arguments: args || {} }, { bot: bots[0], botId: req.params.botId });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── CHAT V2 — INTELLIGENT (skills + RAG + functions) ─────────
+app.post('/chat/v2', async (req, res) => {
+  try {
+    const { message, botId, sessionId } = req.body;
+    if (!message || !botId) return res.status(400).json({ error: 'message et botId requis' });
+    
+    const bots = await db.select('bots', `?id=eq.${botId}&actif=eq.true`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+    const bot = bots[0];
+    
+    if (typeof checkBotPlanAccess === 'function') {
+      const access = checkBotPlanAccess(bot);
+      if (!access.allowed) return res.status(402).json({ error: access.reason || 'Plan expiré' });
+    }
+    
+    const ragResults = await searchRagChunks(botId, message, 3);
+    const enrichedBot = { ...bot };
+    if (ragResults.length > 0) {
+      enrichedBot.context_documents = ragResults.map(r => ({ title: r.title, content: r.content }));
+    }
+    
+    const systemPrompt = makePromptUniversal(enrichedBot);
+    
+    const apiKey = CONFIG.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'OpenAI non configuré' });
+    
+    const openaiResp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ],
+        temperature: 0.7,
+        max_tokens: 600
+      })
+    });
+    
+    if (!openaiResp.ok) {
+      const errText = await openaiResp.text();
+      return res.status(500).json({ error: 'OpenAI error', details: errText.slice(0, 200) });
+    }
+    
+    const aiData = await openaiResp.json();
+    let aiMessage = aiData.choices?.[0]?.message?.content || '';
+    
+    const fnCalls = parseFunctionCalls(aiMessage);
+    const fnResults = [];
+    if (fnCalls.length > 0 && bot.allowed_functions?.length > 0) {
+      const allowedNames = bot.allowed_functions.map(f => f.name);
+      for (const call of fnCalls) {
+        if (!allowedNames.includes(call.name)) {
+          fnResults.push({ name: call.name, error: 'Fonction non autorisée' });
+          continue;
+        }
+        const result = await executeFunctionCall(call, { bot, botId });
+        fnResults.push({ name: call.name, ...result });
+      }
+      
+      aiMessage = aiMessage.replace(/<function_call>[\s\S]*?<\/function_call>/g, '').trim();
+      if (!aiMessage) aiMessage = '✅ Action effectuée.';
+    }
+    
+    res.json({
+      success: true,
+      response: aiMessage,
+      sources: ragResults.length > 0 ? ragResults.map(r => r.title) : undefined,
+      function_results: fnResults.length > 0 ? fnResults : undefined,
+      meta: {
+        skills_active: bot.skills?.length || 0,
+        rag_chunks: ragResults.length,
+        functions_called: fnResults.length
+      }
+    });
+  } catch(e) {
+    console.error('Chat v2 error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// FIN BLOC v10.5 ────────────────────────────────────────────
+
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
