@@ -665,6 +665,15 @@ app.post('/chat', async (req, res) => {
     await loadSessionFromDb(sid);
     const intents = detectIntent(message, bot);
 
+    // 🧠 v10.7: Extraction des infos client pour mémoire enrichie
+    try {
+      const extracted = (typeof extractClientInfo === 'function') ? extractClientInfo(message) : {};
+      if (extracted && Object.keys(extracted).length > 0) {
+        updateClientMemory(sid, extracted);
+        console.log(`🧠 Infos client extraites:`, Object.keys(extracted).join(', '));
+      }
+    } catch(e) { /* extraction optionnelle, n'empêche pas le chat */ }
+
     // Vérifie les workflows avant l'IA
     const workflowReply = await runWorkflows(botId, message, sid);
 
@@ -674,7 +683,8 @@ app.post('/chat', async (req, res) => {
       console.log(`⚡ Réponse workflow pour bot ${botId}`);
     } else {
       // 🔄 Toujours utiliser le prompt fraîchement calculé (pas celui en DB)
-      const freshPrompt = makePrompt(bot);
+      // 🧠 v10.7: makePromptSmart si dispo (mémoire client + niche adaptée + skills)
+      const freshPrompt = (typeof makePromptSmart === 'function') ? makePromptSmart(bot, sid) : makePrompt(bot);
       try {
         reply = await callAI(freshPrompt, sid, message);
       } catch(aiErr) {
@@ -10962,6 +10972,272 @@ loadNiches();
 });
 
 // FIN BLOC v10.6 ────────────────────────────────────────────
+
+
+// ════════════════════════════════════════════════════════════
+// v10.7 — BOT INTELLIGENT (mémoire + photos catalogue + adaptation niche)
+// 1) Extraction automatique des infos client depuis les messages
+// 2) Mémoire enrichie (le bot retient prénom/tél/adresse/email du client)
+// 3) Catalogue avec photos affichées dans le widget chat
+// 4) Prompt adaptatif selon la niche du bot (sans casser makePrompt)
+// 5) Connexion skills v10.5 au /chat principal (rétrocompat)
+// ════════════════════════════════════════════════════════════
+
+// ─── EXTRACTION INTELLIGENTE DES INFOS CLIENT ────────────────
+// Cherche dans le message client : prénom, téléphone, adresse, email
+// Retourne un objet { prenom, telephone, adresse, email } avec les infos détectées
+
+function extractClientInfo(message) {
+  if (!message || typeof message !== 'string') return {};
+  const info = {};
+  const text = message.trim();
+
+  // 📞 Téléphone — formats sénégalais (77/76/78/70/75 ou +221)
+  const phoneMatch = text.match(/(?:\+?221[\s-]?)?(7[05678])[\s-]?(\d{3})[\s-]?(\d{2})[\s-]?(\d{2})/);
+  if (phoneMatch) {
+    info.telephone = (phoneMatch[1] + phoneMatch[2] + phoneMatch[3] + phoneMatch[4]);
+  } else {
+    const intlMatch = text.match(/\+?\d{1,4}[\s-]?\d{2,3}[\s-]?\d{3}[\s-]?\d{4}/);
+    if (intlMatch) info.telephone = intlMatch[0].replace(/[\s-]/g,'');
+  }
+
+  // 📧 Email
+  const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  if (emailMatch) info.email = emailMatch[0].toLowerCase();
+
+  // 👤 Prénom — "je m'appelle X", "mon nom est X", ou détection avant le téléphone
+  const prenomPatterns = [
+    /je\s+m'?appelle\s+([A-Za-zÀ-ÿ]{2,20}(?:\s+[A-Za-zÀ-ÿ]{2,20})?)/i,
+    /mon\s+nom\s+(?:est|c'?est)\s+([A-Za-zÀ-ÿ]{2,20}(?:\s+[A-Za-zÀ-ÿ]{2,20})?)/i,
+    /c'?est\s+([A-Za-zÀ-ÿ]{2,20})\b/i,
+    /^([A-Za-zÀ-ÿ]{3,20})\s+(?:\+?221|7[05678]|\d{2,})/
+  ];
+  for (const pattern of prenomPatterns) {
+    const m = text.match(pattern);
+    if (m && m[1]) {
+      // Filtre les mots courants qui ne sont pas des prénoms
+      const candidate = m[1].trim();
+      const stopwords = ['oui', 'non', 'bonjour', 'salam', 'asalaa', 'merci', 'svp', 'svp', 'voici', 'mon', 'ma', 'le', 'la', 'wave', 'orange', 'cash', 'free'];
+      if (!stopwords.includes(candidate.toLowerCase())) {
+        info.prenom = candidate.charAt(0).toUpperCase() + candidate.slice(1).toLowerCase();
+        break;
+      }
+    }
+  }
+
+  // 📍 Adresse — détection après "adresse", "habite", "j'habite"
+  const adressePatterns = [
+    /(?:adresse|j'?habite|domicile|livrer\s+à)\s*[:est]*\s*([^.\n]{8,100})/i,
+    /(?:à|au)\s+([A-Za-zÀ-ÿ\s,]{8,80})$/i
+  ];
+  for (const pattern of adressePatterns) {
+    const m = text.match(pattern);
+    if (m && m[1]) {
+      const addr = m[1].trim().replace(/[.,;]+$/, '');
+      if (addr.length >= 5 && addr.length <= 120) {
+        info.adresse = addr;
+        break;
+      }
+    }
+  }
+
+  return info;
+}
+
+// ─── MÉMOIRE CLIENT ENRICHIE PAR SESSION ─────────────────────
+// Stockage en mémoire des infos extraites du client pour chaque session
+// Ces infos sont injectées dans le prompt système → le bot s'en souvient
+
+const clientMemory = {}; // { sid: { prenom, telephone, adresse, email, last_updated } }
+
+function updateClientMemory(sid, newInfo) {
+  if (!sid || !newInfo) return;
+  if (!clientMemory[sid]) clientMemory[sid] = {};
+  for (const k of ['prenom', 'telephone', 'adresse', 'email']) {
+    if (newInfo[k] && !clientMemory[sid][k]) {
+      clientMemory[sid][k] = newInfo[k];
+    }
+  }
+  clientMemory[sid].last_updated = Date.now();
+
+  // Cleanup auto : supprime les sessions inactives depuis +24h
+  if (Math.random() < 0.05) {
+    const cutoff = Date.now() - 24*60*60*1000;
+    for (const k of Object.keys(clientMemory)) {
+      if (clientMemory[k].last_updated < cutoff) delete clientMemory[k];
+    }
+  }
+}
+
+function getClientMemory(sid) {
+  return clientMemory[sid] || {};
+}
+
+// ─── PROMPT SMART — adaptatif niche + mémoire client ─────────
+// Wrap par-dessus makePrompt sans le casser
+// Ajoute :
+//   - Section "INFOS CLIENT DÉJÀ CONNUES" avec ce qu'on sait
+//   - Règles spécifiques selon la niche (boutique vs restaurant vs salon)
+//   - Skills v10.5 si activés sur le bot
+//   - Photos catalogue (si disponibles)
+
+function makePromptSmart(bot, sid) {
+  // 1) On part du prompt de base (rétrocompat)
+  let basePrompt = (typeof makePrompt === 'function') ? makePrompt(bot) : '';
+
+  // 2) On ajoute la mémoire client SI on a des infos
+  const memory = getClientMemory(sid);
+  let memBlock = '';
+  if (memory.prenom || memory.telephone || memory.adresse || memory.email) {
+    memBlock = `\n\n═══════════════════════════════════════════════
+INFOS CLIENT DÉJÀ CONNUES (issues de la conversation):
+${memory.prenom ? `- Prénom: ${memory.prenom}` : ''}
+${memory.telephone ? `- Téléphone: ${memory.telephone}` : ''}
+${memory.adresse ? `- Adresse: ${memory.adresse}` : ''}
+${memory.email ? `- Email: ${memory.email}` : ''}
+
+⚠️ RÈGLE CRITIQUE: NE REDEMANDE PAS ces informations. Le client te les a déjà données. Utilise-les directement dans le récapitulatif ou la confirmation. Si tu as besoin d'infos manquantes, demande UNIQUEMENT celles qui ne sont pas dans cette liste.
+═══════════════════════════════════════════════`;
+  }
+
+  // 3) Ajustements par niche — règles spécifiques pour ne pas être générique
+  let nicheAdjust = '';
+  const niche = (bot.niche || '').toLowerCase();
+
+  if (niche === 'boutique') {
+    nicheAdjust = `\n\nADAPTATION BOUTIQUE:
+- Tu es l'assistant d'une BOUTIQUE qui vend des produits
+- NE PROPOSE JAMAIS "S'inscrire" — propose "Voir produits" / "Commander"
+- Pour le catalogue, présente les produits de manière commerciale et attractive
+- L'email du client est OPTIONNEL et NE DOIT être demandé qu'UNE seule fois max`;
+  } else if (niche === 'restaurant' || niche === 'traiteur') {
+    nicheAdjust = `\n\nADAPTATION RESTAURANT:
+- Tu es l'assistant d'un RESTAURANT
+- Pour le catalogue, présente les plats de manière appétissante (avec photos si disponibles)
+- L'email n'est PAS nécessaire pour une commande à livrer
+- Demande seulement: prénom, téléphone, adresse de livraison`;
+  } else if (niche === 'salon' || niche === 'salon_coiffure' || niche === 'beaute') {
+    nicheAdjust = `\n\nADAPTATION SALON DE BEAUTÉ:
+- Tu es l'assistant d'un SALON DE COIFFURE/BEAUTÉ
+- NE PROPOSE PAS de "commander" — propose "Prendre RDV"
+- Pour les prestations, indique la durée estimée
+- Pour un RDV, demande SEULEMENT: prénom, téléphone, prestation, date/heure souhaitée`;
+  } else if (niche === 'auto_ecole' || niche === 'auto-ecole') {
+    nicheAdjust = `\n\nADAPTATION AUTO-ÉCOLE:
+- Tu es l'assistant d'une AUTO-ÉCOLE
+- Présente les forfaits avec ce qui est inclus (code, heures conduite)
+- Pour s'inscrire: explique les documents requis
+- Propose RDV info pour visite des locaux`;
+  } else if (niche === 'pharmacie') {
+    nicheAdjust = `\n\nADAPTATION PHARMACIE:
+- Tu es l'assistant d'une PHARMACIE
+- ⚠️ JAMAIS de conseil médical, JAMAIS de diagnostic
+- Si symptômes décrits, redirige vers le pharmacien ou un médecin
+- En cas d'urgence (douleur intense, malaise): redirige vers SAMU 1515`;
+  } else if (niche === 'clinique' || niche === 'clinique_medicale' || niche === 'medical') {
+    nicheAdjust = `\n\nADAPTATION CLINIQUE MÉDICALE:
+- Tu es l'assistant d'une CLINIQUE
+- ⚠️ JAMAIS de diagnostic, JAMAIS de prescription
+- Pour un RDV: spécialité → motif court → date → confirmation
+- Confidentialité ABSOLUE`;
+  } else if (niche === 'hotel') {
+    nicheAdjust = `\n\nADAPTATION HÔTEL:
+- Tu es l'assistant d'un HÔTEL
+- Pour réservation: dates (arrivée + départ) → type chambre → nb personnes
+- L'email EST nécessaire pour confirmation officielle de réservation`;
+  } else if (niche === 'taxi' || niche === 'transport') {
+    nicheAdjust = `\n\nADAPTATION TAXI/TRANSPORT:
+- Tu es l'assistant d'un service TAXI
+- Pour course: lieu prise en charge → destination → date/heure → nb passagers
+- Estime le tarif selon les zones`;
+  } else if (niche === 'service' || niche === 'service_pro' || niche === 'artisan') {
+    nicheAdjust = `\n\nADAPTATION SERVICE/ARTISAN:
+- Tu es l'assistant d'un ARTISAN/SERVICE PRO
+- Pour devis: type de problème → adresse → coordonnées
+- Mentionne si urgence disponible`;
+  }
+
+  // 4) Skills v10.5 — connexion automatique si skills activés sur le bot
+  let skillsBlock = '';
+  if (Array.isArray(bot.skills) && bot.skills.length > 0 && typeof SKILLS_CATALOG !== 'undefined') {
+    const skillsTexts = bot.skills
+      .filter(sid => SKILLS_CATALOG[sid])
+      .map(sid => SKILLS_CATALOG[sid].prompt)
+      .join('\n\n');
+    if (skillsTexts) {
+      skillsBlock = `\n\n═══════════════════════════════════════════════
+COMPÉTENCES SPÉCIALISÉES ACTIVÉES:
+═══════════════════════════════════════════════
+${skillsTexts}
+═══════════════════════════════════════════════`;
+    }
+  }
+
+  // 5) Catalogue avec photos si disponibles (signal au bot qu'il peut renvoyer les photos)
+  let catWithPhotosBlock = '';
+  if (Array.isArray(bot.catalogue) && bot.catalogue.some(p => p.photo)) {
+    catWithPhotosBlock = `\n\nNOTE PHOTOS:
+- Plusieurs produits ont des photos disponibles
+- Quand le client demande à voir le catalogue, mentionne brièvement et indique que les photos seront affichées en bas
+- Sois concis dans la liste textuelle (le widget affichera les photos automatiquement)`;
+  }
+
+  return basePrompt + memBlock + nicheAdjust + skillsBlock + catWithPhotosBlock;
+}
+
+// ─── ENDPOINT : CATALOGUE AVEC PHOTOS ────────────────────────
+// Le widget chat appelle ce endpoint quand le client demande "voir produits"
+// Retourne le catalogue avec photos formatées pour affichage en cards
+
+app.get('/chat/catalogue/:botId', async (req, res) => {
+  try {
+    const bots = await db.select('bots', `?id=eq.${req.params.botId}&actif=eq.true&select=id,nom,niche,couleur,emoji`);
+    if (!bots?.length) return res.status(404).json({ error: 'Bot non trouvé' });
+
+    // Récupère les produits de la table produits (avec photos)
+    const produits = await db.select('produits', `?bot_id=eq.${req.params.botId}&actif=eq.true&visible=eq.true&order=created_at.desc&limit=50`);
+
+    const items = (produits || []).map(p => ({
+      id: p.id,
+      nom: p.nom,
+      prix: p.prix || 0,
+      prix_formate: (p.prix || 0).toLocaleString('fr-FR') + ' FCFA',
+      desc: p.desc || null,
+      photo: p.photo || null,
+      emoji: p.emoji || bots[0].emoji || '🛍️',
+      categorie: p.categorie || null,
+      stock: p.stock != null ? p.stock : null,
+      disponible: (p.stock == null || p.stock > 0)
+    }));
+
+    res.json({
+      bot_id: req.params.botId,
+      bot_nom: bots[0].nom,
+      bot_couleur: bots[0].couleur,
+      total: items.length,
+      items
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── ENDPOINT : MÉMOIRE CLIENT (debug + intégrations) ────────
+app.get('/chat/memory/:sid', (req, res) => {
+  const memory = getClientMemory(req.params.sid);
+  res.json({
+    session_id: req.params.sid,
+    has_memory: Object.keys(memory).length > 0,
+    memory
+  });
+});
+
+app.delete('/chat/memory/:sid', (req, res) => {
+  delete clientMemory[req.params.sid];
+  res.json({ success: true, session_id: req.params.sid });
+});
+
+// FIN BLOC v10.7 ────────────────────────────────────────────
 
 
 const PORT = process.env.PORT || 8080;
